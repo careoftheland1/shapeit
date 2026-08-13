@@ -1144,7 +1144,12 @@ export default function ShelterVolumeStudy() {
   const [history, setHistory] = useState([]);
   const [showRoofs, setShowRoofs] = useState(() => initialProject?.showRoofs ?? true);
   const [units, setUnits] = useState(() => initialProject?.units ?? "imperial");
-  const [takeoffOpen, setTakeoffOpen] = useState(true);
+  // Both panels default open on a normal desktop-width screen (unchanged
+  // behavior) but default collapsed/closed on a narrow (phone-width)
+  // screen, where either one alone already covers most of the viewport
+  // and having both open leaves no room to actually see the model.
+  const [controlsCollapsed, setControlsCollapsed] = useState(() => window.innerWidth < 700);
+  const [takeoffOpen, setTakeoffOpen] = useState(() => window.innerWidth >= 700);
   // Small non-blocking notice — autosave restore, or a save/load result.
   const [toast, setToast] = useState(() => (initialProject ? "restored your last session" : ""));
   useEffect(() => {
@@ -1808,12 +1813,31 @@ export default function ShelterVolumeStudy() {
       )}
 
       {/* control card */}
+      {controlsCollapsed ? (
+        <button
+          onClick={() => setControlsCollapsed(false)}
+          style={{
+            position: "absolute", top: 64, left: 12, background: GLASS_BG,
+            backdropFilter: "blur(20px) saturate(140%)", WebkitBackdropFilter: "blur(20px) saturate(140%)",
+            border: GLASS_BORDER, borderRadius: GLASS_RADIUS, boxShadow: GLASS_SHADOW,
+            padding: "9px 14px", color: WHITE, fontFamily: "ui-monospace, monospace", fontSize: 11,
+            letterSpacing: "0.02em", cursor: "pointer",
+          }}
+        >
+          &#9776; menu
+        </button>
+      ) : (
       <div className="glass-scroll" style={{
         position: "absolute", top: 64, left: 12, width: 218, maxHeight: "calc(100% - 140px)",
         overflowY: "auto", background: GLASS_BG, backdropFilter: "blur(20px) saturate(140%)",
         WebkitBackdropFilter: "blur(20px) saturate(140%)",
         border: GLASS_BORDER, borderRadius: GLASS_RADIUS, padding: "10px 12px 14px", boxShadow: GLASS_SHADOW,
       }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={label}>Menu</span>
+          <button style={btn} onClick={() => setControlsCollapsed(true)}>&#8722; minimize</button>
+        </div>
+
         <div style={row}>
           <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addVolume}>+ CUBIFORM</button>
           <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addCylinder}>+ CYLINDER</button>
@@ -1974,6 +1998,7 @@ export default function ShelterVolumeStudy() {
           </div>
         )}
       </div>
+      )}
 
       {/* camera + output strip */}
       <div style={{
