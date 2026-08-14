@@ -1665,6 +1665,23 @@ export default function ShelterVolumeStudy() {
     applyCam();
   };
 
+  // Small continuous nudges from wherever the camera currently is —
+  // distinct from `preset` above, which jumps to a fixed named angle.
+  // Same phi clamp as the orbit-drag handler, so a nudge can't flip the
+  // camera past top-down or below eye-level.
+  const CAM_ROTATE_STEP = Math.PI / 24; // 7.5°
+  const CAM_TILT_STEP = Math.PI / 48;   // 3.75° — finer than rotate, the usable range is much narrower
+  const rotateCam = (dir) => {
+    const { cam, applyCam } = threeRef.current;
+    cam.theta += dir * CAM_ROTATE_STEP;
+    applyCam();
+  };
+  const tiltCam = (dir) => {
+    const { cam, applyCam } = threeRef.current;
+    cam.phi = Math.min(Math.PI * 0.49, Math.max(0.12, cam.phi + dir * CAM_TILT_STEP));
+    applyCam();
+  };
+
   const downloadPlan = () => {
     const { markup } = planSVG(volumes, units);
     const blob = new Blob([markup], { type: "image/svg+xml" });
@@ -1801,10 +1818,12 @@ export default function ShelterVolumeStudy() {
         building blocks
       </div>
 
-      {/* toast — autosave restore notice, save/load result */}
+      {/* toast — autosave restore notice, save/load result. Sits below the
+          title row (not beside it) so a long message doesn't overlap the
+          wordmark on a narrow/phone-width screen. */}
       {toast && (
         <div style={{
-          position: "absolute", top: 15, left: "50%", transform: "translateX(-50%)",
+          position: "absolute", top: 40, left: "50%", transform: "translateX(-50%)",
           pointerEvents: "none", fontFamily: "ui-monospace, monospace", fontSize: 11,
           letterSpacing: "0.02em", color: INK,
         }}>
@@ -1839,6 +1858,12 @@ export default function ShelterVolumeStudy() {
         </div>
 
         <div style={row}>
+          <button style={{ ...btn, flex: 1 }} onClick={saveProject}>save</button>
+          <button style={{ ...btn, flex: 1 }} onClick={triggerLoad}>load</button>
+          <input ref={loadInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={handleLoadFile} />
+        </div>
+
+        <div style={{ ...row, marginTop: 6 }}>
           <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addVolume}>+ CUBIFORM</button>
           <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addCylinder}>+ CYLINDER</button>
         </div>
@@ -2000,7 +2025,7 @@ export default function ShelterVolumeStudy() {
       </div>
       )}
 
-      {/* camera + output strip */}
+      {/* camera presets + output strip */}
       <div style={{
         position: "absolute", bottom: 12, right: 12, display: "flex", gap: 6, flexWrap: "wrap",
         justifyContent: "flex-end", maxWidth: 340,
@@ -2008,12 +2033,27 @@ export default function ShelterVolumeStudy() {
         {[["aerial-sw", "SW"], ["aerial-ne", "NE"], ["eye-s", "eye S"], ["eye-w", "eye W"], ["top", "top"]].map(([k, n]) => (
           <button key={k} style={btnOnCanvas} onClick={() => preset(k)}>{n}</button>
         ))}
-        <button style={btnOnCanvas} onClick={snapshot}>&#128247; view</button>
-        <button style={btnOnCanvas} onClick={saveProject}>SAVE</button>
-        <button style={btnOnCanvas} onClick={triggerLoad}>LOAD</button>
-        <input ref={loadInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={handleLoadFile} />
+        <button style={btnOnCanvas} onClick={snapshot}>&#128247; snapshot</button>
         <button style={btnOnCanvasActive} onClick={() => setPlanOpen(true)}>PLAN &#8599;</button>
         <button style={takeoffOpen ? btnOnCanvasActive : btnOnCanvas} onClick={() => setTakeoffOpen((s) => !s)}>TAKEOFF</button>
+      </div>
+
+      {/* camera orbit — bottom-left, separate from the presets on the
+          right: a continuous nudge from wherever the camera already is,
+          not a jump to a fixed angle. */}
+      <div style={{ position: "absolute", bottom: 12, left: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={{
+          fontFamily: "ui-monospace, monospace", fontSize: 10, color: WHITE_DIM,
+          textShadow: "0 1px 4px rgba(0,0,0,0.65)", letterSpacing: "0.02em",
+        }}>
+          orbit
+        </span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={btnOnCanvas} onClick={() => rotateCam(-1)}>&#9664;</button>
+          <button style={btnOnCanvas} onClick={() => rotateCam(1)}>&#9654;</button>
+          <button style={btnOnCanvas} onClick={() => tiltCam(1)}>&#9650;</button>
+          <button style={btnOnCanvas} onClick={() => tiltCam(-1)}>&#9660;</button>
+        </div>
       </div>
 
       {/* plan modal — an opaque printed-drawing card (not glass): it's meant
