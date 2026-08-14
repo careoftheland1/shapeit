@@ -2025,17 +2025,22 @@ export default function ShelterVolumeStudy() {
       </div>
       )}
 
-      {/* camera presets + output strip */}
+      {/* camera presets + output strip — presets on their own line, the
+          output actions (snapshot/plan/takeoff) on the line below. */}
       <div style={{
-        position: "absolute", bottom: 12, right: 12, display: "flex", gap: 6, flexWrap: "wrap",
-        justifyContent: "flex-end", maxWidth: 340,
+        position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column",
+        alignItems: "flex-end", gap: 6,
       }}>
-        {[["aerial-sw", "SW"], ["aerial-ne", "NE"], ["eye-s", "eye S"], ["eye-w", "eye W"], ["top", "top"]].map(([k, n]) => (
-          <button key={k} style={btnOnCanvas} onClick={() => preset(k)}>{n}</button>
-        ))}
-        <button style={btnOnCanvas} onClick={snapshot}>&#128247; snapshot</button>
-        <button style={btnOnCanvasActive} onClick={() => setPlanOpen(true)}>PLAN &#8599;</button>
-        <button style={takeoffOpen ? btnOnCanvasActive : btnOnCanvas} onClick={() => setTakeoffOpen((s) => !s)}>TAKEOFF</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {[["aerial-sw", "SW"], ["aerial-ne", "NE"], ["eye-s", "eye S"], ["eye-w", "eye W"], ["top", "top"]].map(([k, n]) => (
+            <button key={k} style={btnOnCanvas} onClick={() => preset(k)}>{n}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <button style={btnOnCanvas} onClick={snapshot}>&#128247; snapshot</button>
+          <button style={btnOnCanvasActive} onClick={() => setPlanOpen(true)}>PLAN &#8599;</button>
+          <button style={takeoffOpen ? btnOnCanvasActive : btnOnCanvas} onClick={() => setTakeoffOpen((s) => !s)}>TAKEOFF</button>
+        </div>
       </div>
 
       {/* camera orbit — bottom-left, separate from the presets on the
