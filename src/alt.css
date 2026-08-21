@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@300;400;500&display=swap');
+
+.buildit-alt{font-family:'Source Code Pro',monospace;color:#242219}
+.buildit-alt .alt-header{position:fixed;z-index:30;top:0;left:0;right:0;padding:20px 18px;display:grid;grid-template-columns:1fr 1fr;align-items:start;pointer-events:none;font-size:9px;text-transform:uppercase;letter-spacing:.09em;color:#fff;mix-blend-mode:difference}
+.buildit-alt .alt-header a{pointer-events:auto;color:inherit;text-decoration:none;text-transform:lowercase;letter-spacing:-.04em;font-size:11px}.buildit-alt .alt-header span{text-align:right;opacity:.72}
+
+/* Hide the original floating title pair in the alternate only. */
+.buildit-alt>div:last-child>div:nth-of-type(2),.buildit-alt>div:last-child>div:nth-of-type(3){display:none}
+
+/* Project menu: a quiet sheet pinned to the left edge. */
+.buildit-alt .alt-menu-panel{top:0!important;left:0!important;width:278px!important;max-height:100%!important;height:100%;padding:70px 18px 32px!important;background:rgba(231,224,210,.96)!important;border:0!important;border-right:1px solid rgba(36,34,25,.28)!important;border-radius:0!important;box-shadow:none!important;backdrop-filter:blur(12px)!important;-webkit-backdrop-filter:blur(12px)!important;mask-image:none!important;-webkit-mask-image:none!important}
+.buildit-alt .alt-menu-panel *{color:#242219!important;text-shadow:none!important}
+.buildit-alt .alt-menu-panel>div:first-child{padding-bottom:11px;border-bottom:1px solid rgba(36,34,25,.35);margin-bottom:12px!important}
+.buildit-alt .alt-menu-panel button{font-family:'Source Code Pro',monospace!important;font-size:9px!important;text-transform:uppercase;letter-spacing:.07em!important;padding:7px 2px!important;transition:opacity .18s,color .18s}
+.buildit-alt .alt-menu-panel button:hover{color:#9c502e!important}
+.buildit-alt .alt-menu-panel button[style*="font-weight: 700"]{color:#9c502e!important;text-decoration:none!important}
+.buildit-alt .alt-menu-panel button[style*="line-through"]{opacity:.32}
+.buildit-alt .alt-menu-panel div[style*="text-transform: uppercase"]{margin-top:18px!important;margin-bottom:7px!important;padding-top:11px;border-top:1px solid rgba(36,34,25,.2);font-size:8px!important;letter-spacing:.11em!important;opacity:.62}
+.buildit-alt .alt-menu-panel div[style*="border-bottom"]{border-color:rgba(36,34,25,.16)!important}
+
+/* Menu workflow and hierarchy. React keeps the original controls; the
+   alternate reorders their visual flow without changing their behavior. */
+.buildit-alt .alt-menu-panel{display:flex!important;flex-direction:column}
+.buildit-alt .alt-menu-panel>div{order:2}
+.buildit-alt .alt-menu-panel .alt-menu-head{order:0!important;margin-bottom:8px!important}
+.buildit-alt .alt-menu-panel .alt-menu-head>span{font-size:0!important}.buildit-alt .alt-menu-panel .alt-menu-head>span:after{content:"Build / Project 01";font-size:8px;letter-spacing:.11em}
+.buildit-alt .alt-menu-panel .alt-add-actions{order:1!important;display:grid!important;grid-template-columns:1fr 1fr;gap:7px!important;margin:0 0 16px!important;padding:14px 0 18px;border-bottom:1px solid rgba(36,34,25,.28)}
+.buildit-alt .alt-menu-panel .alt-add-actions:before{content:"01 / Add volume";grid-column:1/-1;font-size:8px;letter-spacing:.11em;text-transform:uppercase;opacity:.58;margin-bottom:4px}
+.buildit-alt .alt-menu-panel .alt-add-actions button{background:#292a22!important;color:#eee8de!important;padding:12px 8px!important;text-align:left;text-decoration:none!important}.buildit-alt .alt-menu-panel .alt-add-actions button:hover{background:#9c502e!important;color:#fff!important}
+.buildit-alt .alt-menu-panel .alt-roof-actions{order:3!important;margin-top:18px!important;padding-top:12px;border-top:1px solid rgba(36,34,25,.28)}
+.buildit-alt .alt-menu-panel .alt-roof-actions:before{content:"View";width:100%;font-size:8px;letter-spacing:.11em;text-transform:uppercase;opacity:.58}
+.buildit-alt .alt-menu-panel .alt-unit-actions{order:4!important;margin-bottom:18px!important}
+.buildit-alt .alt-menu-panel .alt-project-actions{order:5!important;display:grid!important;grid-template-columns:1fr 1fr;gap:12px!important;margin-top:auto!important;padding-top:14px;border-top:1px solid rgba(36,34,25,.28)}
+.buildit-alt .alt-menu-panel .alt-project-actions:before{content:"Project file";grid-column:1/-1;font-size:8px;letter-spacing:.11em;text-transform:uppercase;opacity:.58;margin-bottom:-2px}
+.buildit-alt .alt-menu-panel .alt-project-actions button{border-bottom:1px solid rgba(36,34,25,.35)!important;text-align:left!important}
+.buildit-alt .alt-menu-panel .alt-history-actions{order:6!important;display:grid!important;grid-template-columns:1fr 1fr;gap:12px!important;margin-top:5px!important}
+.buildit-alt .alt-menu-panel .alt-history-actions button{font-size:0!important;text-align:left!important;opacity:.58;text-decoration:none!important}.buildit-alt .alt-menu-panel .alt-history-actions button:first-child:after{content:"Undo last";font-size:8px}.buildit-alt .alt-menu-panel .alt-history-actions button:last-child{text-align:right!important}.buildit-alt .alt-menu-panel .alt-history-actions button:last-child:after{content:"Clear project";font-size:8px}.buildit-alt .alt-menu-panel .alt-history-actions button:disabled{opacity:.25}.buildit-alt .alt-menu-panel .alt-history-actions button:last-child:hover{color:#9c502e!important;opacity:1}
+
+/* Clear the left rail for menu utilities. */
+.buildit-alt>div:last-child>div[style*="bottom: 12px"][style*="left: 12px"][style*="flex-direction: column"]{left:294px!important}
+
+/* Takeoff: a dense, square-edged material ledger. */
+.buildit-alt .alt-takeoff-panel{top:0!important;right:0!important;width:350px!important;max-height:100%!important;height:100%;padding:70px 20px 34px!important;background:rgba(36,38,31,.97)!important;border:0!important;border-left:1px solid rgba(255,255,255,.22)!important;border-radius:0!important;box-shadow:none!important;backdrop-filter:blur(12px)!important;-webkit-backdrop-filter:blur(12px)!important;mask-image:none!important;-webkit-mask-image:none!important}
+.buildit-alt .alt-takeoff-panel>div:first-child{padding-bottom:13px;border-bottom:1px solid rgba(255,255,255,.35);margin-bottom:13px!important}
+.buildit-alt .alt-takeoff-panel>div:first-child>span{font-family:'Source Code Pro',monospace!important;font-size:11px!important;text-transform:uppercase;letter-spacing:.1em!important}
+.buildit-alt .alt-takeoff-panel div[style*="text-transform: uppercase"]{margin-top:20px!important;margin-bottom:8px!important;padding-top:10px;border-top:1px solid rgba(255,255,255,.2);font-size:8px!important;letter-spacing:.11em!important}
+.buildit-alt .alt-takeoff-panel div[style*="justify-content: space-between"]{padding-top:7px!important;padding-bottom:7px!important;border-color:rgba(255,255,255,.14)!important;font-size:10px!important}
+.buildit-alt .alt-takeoff-panel button{font-family:'Source Code Pro',monospace!important;font-size:9px!important;text-transform:uppercase;letter-spacing:.08em!important}
+.buildit-alt .alt-takeoff-panel>button:last-child{margin-top:20px!important;padding:13px 0!important;border-top:1px solid rgba(255,255,255,.35)!important;text-align:left!important}
+
+/* Original collapsed menu, restyled to match the sheet. */
+.buildit-alt button[style*="position: absolute"][style*="top: 64px"][style*="left: 12px"]{top:62px!important;left:12px!important;border-radius:0!important;background:#e7e0d2!important;border:1px solid rgba(36,34,25,.3)!important;box-shadow:none!important;color:#242219!important;text-transform:uppercase;font-size:9px!important}
+
+@media(max-width:760px){
+  .buildit-alt .alt-header{grid-template-columns:1fr 1fr;padding:18px 12px}.buildit-alt .alt-header span{font-size:7px}
+  .buildit-alt .alt-menu-panel{width:min(82vw,300px)!important}
+  .buildit-alt .alt-takeoff-panel{width:min(88vw,350px)!important}
+  .buildit-alt>div:last-child>div[style*="bottom: 12px"][style*="left: 12px"][style*="flex-direction: column"]{left:12px!important;bottom:58px!important}
+}
