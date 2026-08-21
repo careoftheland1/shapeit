@@ -27,7 +27,7 @@ function AppAlt() {
 
   return <div className="buildit-alt">
     <div className="alt-header">
-      <a href="https://onthe.land">shelter&nbsp;&nbsp;&nbsp;on the&nbsp;&nbsp;land</a>
+      <a href="https://shelter.onthe.land">shelter&nbsp;&nbsp;&nbsp;on the&nbsp;&nbsp;land</a>
       <span>building blocks</span>
     </div>
     <App />
