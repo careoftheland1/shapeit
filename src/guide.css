@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@300;400;500&display=swap');
 
 :root { color:#242219; background:#e7e0d2; font-family:'Source Code Pro',monospace; font-synthesis:none; }
 * { box-sizing:border-box; }
@@ -6,46 +6,43 @@ html { scroll-behavior:smooth; }
 body { margin:0; }
 button { color:inherit; }
 .guide-page { min-height:100vh; background:#e7e0d2; }
-.guide-bar { position:sticky; z-index:10; top:0; height:52px; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; padding:0 20px; background:rgba(231,224,210,.94); border-bottom:1px solid rgba(34,32,24,.18); backdrop-filter:blur(12px); font-size:9px; letter-spacing:.08em; }
+.guide-bar { position:sticky; z-index:10; top:0; height:52px; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; padding:0 20px; background:rgba(231,224,210,.94); border-bottom:1px solid #aaa398; backdrop-filter:blur(12px); font-size:9px; letter-spacing:.08em; }
 .guide-wordmark { letter-spacing:-.04em; text-transform:lowercase; }
-.guide-title { text-align:center; color:#8d877c; }
+.guide-title { text-align:center; }
 .guide-count { justify-self:end; opacity:.52; }
-.guide-intro { min-height:460px; display:grid; grid-template-columns:1fr 2fr 1fr; grid-template-rows:auto 1fr auto; gap:30px; padding:72px 6vw 48px; }
-.guide-kicker { margin:5px 0 0; font-size:8px; line-height:1.5; letter-spacing:.09em; color:#8d877c; }
+.guide-intro { min-height:540px; display:grid; grid-template-columns:1fr 2fr 1fr; grid-template-rows:auto 1fr auto; gap:30px; padding:72px 6vw 48px; }
+.guide-kicker { margin:5px 0 0; font-size:8px; line-height:1.5; letter-spacing:.09em; }
 .guide-intro h1 { align-self:center; margin:0; font:800 clamp(60px,8vw,118px)/.82 Helvetica Neue,Helvetica,Arial,sans-serif; letter-spacing:-.075em; }
 .guide-deck { align-self:center; max-width:310px; margin:0; font-size:10px; line-height:1.7; }
-.guide-line { grid-column:1/-1; height:1px; background:rgba(34,32,24,.18); }
+.guide-line { grid-column:1/-1; height:1px; background:#aaa398; }
 .guide-line span { display:block; width:20%; height:2px; background:#9c502e; }
-
-/* Tabs: a flat row with an underline-active state, not a bordered grid of cells — the same
-   formula the "GET QUOTE" reference's tab bar uses (and that spaceit's own mobile tab bar was
-   built from). No cell borders, no per-tab box. */
-.journey-tabs { position:sticky; z-index:9; top:52px; display:grid; grid-template-columns:repeat(6,1fr); margin:0 6vw; background:#e7e0d2; border-bottom:1px solid rgba(34,32,24,.18); }
-.journey-tabs button { min-height:44px; display:flex; align-items:center; gap:10px; padding:0 14px; border:0; border-bottom:2px solid transparent; background:transparent; font:400 8px 'Source Code Pro',monospace; letter-spacing:.06em; text-transform:uppercase; color:#8d877c; cursor:pointer; }
-.journey-tabs button:hover { color:#242219; border-bottom-color:#9c502e; }
+.journey-tabs { position:sticky; z-index:9; top:52px; display:grid; grid-template-columns:repeat(6,1fr); margin:0 6vw; background:#e7e0d2; border:1px solid #8d877c; }
+.journey-tabs button { min-height:48px; display:flex; align-items:center; gap:12px; padding:0 14px; border:0; border-right:1px solid #aaa398; background:transparent; font:400 8px 'Source Code Pro',monospace; letter-spacing:.04em; cursor:pointer; }
+.journey-tabs button:last-child { border-right:0; }
+.journey-tabs button:hover { color:#eee8de; background:#24261f; }
 .journey-tabs span { color:#9c502e; }
-
-/* Journey: one flat background throughout, the same paper as the rest of the page — a thin top
-   rule divides steps instead of stacking full-bleed alternating solid-color blocks. That striped
-   block treatment (plus the bordered tab cells above) was the "grid" being simplified away. */
-.journey { margin:70px 6vw 0; }
-.journey-step { min-height:360px; display:grid; grid-template-columns:1.1fr 1.2fr .7fr; grid-template-rows:1fr auto; gap:35px; padding:38px 0 28px; border-top:1px solid rgba(34,32,24,.18); scroll-margin-top:110px; }
-.journey-step:first-child { border-top:0; }
+.journey { margin:70px 6vw 0; border:1px solid #8d877c; }
+.journey-step { min-height:430px; display:grid; grid-template-columns:1.1fr 1.2fr .7fr; grid-template-rows:1fr auto; gap:35px; padding:38px 3vw 28px; scroll-margin-top:110px; }
+.journey-step:nth-child(1) { background:#f2ede4; }
+.journey-step:nth-child(2) { background:#ddd7cc; }
+.journey-step:nth-child(3) { background:#c9c2b6; }
+.journey-step:nth-child(4) { color:#ebe5da; background:#8d694f; }
+.journey-step:nth-child(5) { color:#ded9cf; background:#292a22; }
+.journey-step:nth-child(6) { color:#f1e9dd; background:#9c502e; }
 .journey-step header { display:flex; align-items:baseline; gap:24px; }
 .step-number { color:#9c502e; font-size:12px; }
+.journey-step:nth-child(4) .step-number,.journey-step:nth-child(5) .step-number { color:#e6a17d; }
+.journey-step:nth-child(6) .step-number { color:#242219; }
 .journey-step h2 { margin:0; font:800 clamp(44px,5vw,76px)/.85 Helvetica Neue,Helvetica,Arial,sans-serif; letter-spacing:-.065em; }
 .step-body { align-self:center; }
-.step-phase { margin:0 0 34px; font-size:8px; letter-spacing:.1em; color:#8d877c; }
+.step-phase { margin:0 0 34px; font-size:8px; letter-spacing:.1em; }
 .step-copy { max-width:390px; margin:0; font-size:11px; line-height:1.75; }
 .step-action { align-self:end; display:flex; justify-content:space-between; padding:13px 0; border-top:1px solid currentColor; font-size:8px; letter-spacing:.08em; }
 .step-action b { font-weight:400; }
 .step-progress { grid-column:1/-1; display:grid; grid-template-columns:repeat(6,1fr); gap:7px; }
 .step-progress i { height:2px; background:currentColor; opacity:.16; }
 .step-progress i.passed { background:#9c502e; opacity:1; }
-
-/* One dark anchor at the very end (echoing the reference's solid black CTA bar) instead of the
-   page ending on whatever color the last step's block happened to be. */
-.guide-footer { min-height:220px; display:grid; grid-template-columns:1fr 2fr 1fr; align-items:end; gap:40px; padding:60px 6vw 35px; color:#c9c2b6; background:#242219; font-size:8px; line-height:1.7; letter-spacing:.04em; }
+.guide-footer { min-height:330px; display:grid; grid-template-columns:1fr 2fr 1fr; align-items:end; gap:40px; padding:80px 6vw 35px; color:#bbb8ae; background:#171812; font-size:8px; line-height:1.7; letter-spacing:.04em; }
 .guide-footer p { margin:0; }
 .guide-footer p:nth-child(2) { justify-self:center; }
 .guide-footer span { justify-self:end; }
@@ -53,16 +50,16 @@ button { color:inherit; }
 @media(max-width:760px) {
   .guide-bar { grid-template-columns:1fr auto; padding:0 14px; }
   .guide-title { display:none; }
-  .guide-intro { min-height:460px; display:block; padding:62px 20px 35px; }
+  .guide-intro { min-height:500px; display:block; padding:62px 20px 35px; }
   .guide-kicker { margin-bottom:65px; }
   .guide-intro h1 { font-size:18vw; }
   .guide-deck { width:78%; margin:48px 0 62px auto; font-size:9px; }
   .guide-line { margin-top:0; }
-  .journey-tabs { top:52px; margin:0; overflow-x:auto; grid-template-columns:repeat(6,minmax(98px,1fr)); scrollbar-width:none; }
+  .journey-tabs { top:52px; margin:0; overflow-x:auto; grid-template-columns:repeat(6,minmax(98px,1fr)); border-left:0; border-right:0; scrollbar-width:none; }
   .journey-tabs::-webkit-scrollbar { display:none; }
   .journey-tabs button { min-height:44px; gap:7px; padding:0 10px; white-space:nowrap; }
-  .journey { margin:0; }
-  .journey-step { min-height:70vh; display:flex; flex-direction:column; gap:0; padding:27px 20px 22px; scroll-margin-top:96px; }
+  .journey { margin:0; border:0; }
+  .journey-step { min-height:78vh; display:flex; flex-direction:column; gap:0; padding:27px 20px 22px; scroll-margin-top:96px; }
   .journey-step header { gap:15px; }
   .step-number { min-width:28px; }
   .journey-step h2 { font-size:14vw; }
@@ -71,6 +68,6 @@ button { color:inherit; }
   .step-copy { max-width:285px; font-size:10px; }
   .step-action { margin-left:43px; }
   .step-progress { width:100%; margin-top:28px; }
-  .guide-footer { min-height:300px; grid-template-columns:1fr; align-content:end; gap:38px; padding:70px 20px 28px; }
+  .guide-footer { min-height:360px; grid-template-columns:1fr; align-content:end; gap:38px; padding:70px 20px 28px; }
   .guide-footer p:nth-child(2),.guide-footer span { justify-self:start; }
 }
