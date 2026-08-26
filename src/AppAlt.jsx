@@ -5,7 +5,7 @@ import "./alt.css";
 function AppAlt() {
   useEffect(() => {
     const tagPanels = () => {
-      document.querySelectorAll(".buildit-alt .glass-scroll").forEach((panel) => {
+      document.querySelectorAll(".shapeit-alt .glass-scroll").forEach((panel) => {
         if (panel.style.left) {
           panel.classList.add("alt-menu-panel");
           const rows = panel.children;
@@ -25,7 +25,7 @@ function AppAlt() {
     return () => observer.disconnect();
   }, []);
 
-  return <div className="buildit-alt">
+  return <div className="shapeit-alt">
     <div className="alt-header">
       <a href="https://shelter.onthe.land">shelter&nbsp;&nbsp;&nbsp;on the&nbsp;&nbsp;land</a>
       <span>building blocks</span>
