@@ -1142,6 +1142,7 @@ export default function ShelterVolumeStudy() {
   const [selectedId, setSelectedId] = useState(null);
   const [planOpen, setPlanOpen] = useState(false);
   const [history, setHistory] = useState([]);
+  const [future, setFuture] = useState([]);
   const [showRoofs, setShowRoofs] = useState(() => initialProject?.showRoofs ?? true);
   const [units, setUnits] = useState(() => initialProject?.units ?? "imperial");
   // Both panels default open on a normal desktop-width screen (unchanged
@@ -1149,7 +1150,12 @@ export default function ShelterVolumeStudy() {
   // screen, where either one alone already covers most of the viewport
   // and having both open leaves no room to actually see the model.
   const [controlsCollapsed, setControlsCollapsed] = useState(() => window.innerWidth < 700);
-  const [takeoffOpen, setTakeoffOpen] = useState(() => window.innerWidth >= 700);
+  const [takeoffOpen, setTakeoffOpen] = useState(false);
+  const [menuMode, setMenuMode] = useState("shape");
+  const [cameraPaletteOpen, setCameraPaletteOpen] = useState(false);
+  const [cameraTool, setCameraTool] = useState("orbit");
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // Small non-blocking notice — autosave restore, or a save/load result.
   const [toast, setToast] = useState(() => (initialProject ? "restored your last session" : ""));
   useEffect(() => {
@@ -1168,6 +1174,10 @@ export default function ShelterVolumeStudy() {
   volumesRef.current = volumes;
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
+  const cameraPaletteOpenRef = useRef(cameraPaletteOpen);
+  cameraPaletteOpenRef.current = cameraPaletteOpen;
+  const cameraToolRef = useRef(cameraTool);
+  cameraToolRef.current = cameraTool;
 
   // Autosave: a safety net, not the primary save path (that's the
   // explicit export below) — debounced so rapid-fire edits (nudging an
@@ -1188,6 +1198,7 @@ export default function ShelterVolumeStudy() {
   }, [volumes, units, showRoofs]);
 
   const pushUndo = useCallback(() => {
+    setFuture([]);
     setHistory((h) => {
       const next = [...h, volumesRef.current];
       return next.length > 50 ? next.slice(next.length - 50) : next;
@@ -1197,9 +1208,20 @@ export default function ShelterVolumeStudy() {
   const undo = useCallback(() => {
     setHistory((h) => {
       if (!h.length) return h;
+      setFuture((f) => [volumesRef.current, ...f].slice(0, 50));
       setVolumes(h[h.length - 1]);
       setSelectedId(null);
       return h.slice(0, -1);
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setFuture((f) => {
+      if (!f.length) return f;
+      setHistory((h) => [...h, volumesRef.current].slice(-50));
+      setVolumes(f[0]);
+      setSelectedId(null);
+      return f.slice(1);
     });
   }, []);
 
@@ -1319,6 +1341,10 @@ export default function ShelterVolumeStudy() {
         mode = "pinch";
         return;
       }
+      if (cameraPaletteOpenRef.current) {
+        mode = cameraToolRef.current;
+        return;
+      }
       setNDC(e);
       ray.setFromCamera(ndc, camera);
       const hits = ray.intersectObjects(volGroup.children, true);
@@ -1377,6 +1403,24 @@ export default function ShelterVolumeStudy() {
             gl.visible = false;
           }
         }
+      } else if (mode === "pan") {
+        const view = new THREE.Vector3().subVectors(cam.target, camera.position).normalize();
+        const right = new THREE.Vector3().crossVectors(view, camera.up).normalize();
+        const screenUp = new THREE.Vector3().crossVectors(right, view).normalize();
+        const scale = cam.radius * 0.0015;
+        cam.target.addScaledVector(right, -dx * scale).addScaledVector(screenUp, dy * scale);
+        applyCam();
+      } else if (mode === "look") {
+        const eye = camera.position.clone();
+        cam.theta += dx * 0.0045;
+        cam.phi = Math.min(Math.PI * 0.85, Math.max(0.08, cam.phi - dy * 0.0045));
+        const sp = Math.sin(cam.phi), cp = Math.cos(cam.phi);
+        cam.target.set(
+          eye.x - cam.radius * sp * Math.cos(cam.theta),
+          eye.y - cam.radius * cp,
+          eye.z - cam.radius * sp * Math.sin(cam.theta)
+        );
+        applyCam();
       } else if (mode === "orbit") {
         if (e.shiftKey) {
           const right = new THREE.Vector3().subVectors(camera.position, cam.target).cross(camera.up).normalize();
@@ -1437,6 +1481,14 @@ export default function ShelterVolumeStudy() {
       mount.removeChild(el);
     };
   }, []);
+
+  useEffect(() => {
+    const canvas = threeRef.current.renderer?.domElement;
+    if (!canvas) return;
+    canvas.style.cursor = cameraPaletteOpen
+      ? cameraTool === "pan" ? "move" : cameraTool === "look" ? "crosshair" : "grab"
+      : "default";
+  }, [cameraPaletteOpen, cameraTool]);
 
   /* ---------- rebuild volumes on state change ---------- */
   useEffect(() => {
@@ -1751,7 +1803,7 @@ export default function ShelterVolumeStudy() {
   );
 
   const plan = planOpen ? planSVG(volumes, units) : null;
-  const takeoff = takeoffOpen ? projectTakeoff(volumes, TAKEOFF_DEFAULTS) : null;
+  const takeoff = projectTakeoff(volumes, TAKEOFF_DEFAULTS);
   const fmt = (n, dp = 0) => n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
   const downloadTakeoff = () => {
@@ -1796,12 +1848,96 @@ export default function ShelterVolumeStudy() {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: PAPER, overflow: "hidden" }}>
+    <div className="shapeit-workspace" style={{ position: "fixed", inset: 0, background: PAPER, overflow: "hidden" }}>
       <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
+
+      <header className="app-bar">
+        <button className="wordmark">
+          <span>shape it&nbsp;&nbsp; on the &nbsp;&nbsp;land</span>
+        </button>
+        <div className="project-switcher">
+          <button onClick={() => { setProjectMenuOpen((v) => !v); setMoreMenuOpen(false); }}>PROJECT 01 <span>⌄</span></button>
+          {projectMenuOpen && <div className="app-popover project-popover">
+            <button onClick={() => { saveProject(); setProjectMenuOpen(false); }}>SAVE PROJECT</button>
+            <button onClick={() => { triggerLoad(); setProjectMenuOpen(false); }}>OPEN PROJECT</button>
+            <button disabled>RENAME <span>SOON</span></button>
+          </div>}
+          <input ref={loadInputRef} type="file" accept=".json,application/json" hidden onChange={handleLoadFile} />
+        </div>
+        <div className="app-actions">
+          <button aria-label="Undo" title="Undo" onClick={undo} disabled={!history.length}>↶</button>
+          <button aria-label="Redo" title="Redo" onClick={redo} disabled={!future.length}>↷</button>
+          <button aria-label="More" onClick={() => { setMoreMenuOpen((v) => !v); setProjectMenuOpen(false); }}>•••</button>
+          {moreMenuOpen && <div className="app-popover more-popover">
+            <div className="popover-label">UNITS</div>
+            <div className="unit-choice"><button className={units === "imperial" ? "active" : ""} onClick={() => setUnits("imperial")}>IMPERIAL</button><button className={units === "metric" ? "active" : ""} onClick={() => setUnits("metric")}>METRIC</button></div>
+            <button className="danger" onClick={() => { clearAll(); setMoreMenuOpen(false); }}>CLEAR PROJECT</button>
+            <button disabled>KEYBOARD CONTROLS <span>SOON</span></button>
+          </div>}
+        </div>
+      </header>
+
+      {controlsCollapsed ? <button className="menu-reopen" onClick={() => setControlsCollapsed(false)}>MENU <span>＋</span></button> :
+      <aside className="builder-menu">
+        <div className="mode-tabs">
+          {["shape", "open", "count", "capture"].map((mode) => <button key={mode} className={menuMode === mode ? "active" : ""} onClick={() => setMenuMode(mode)}>{mode}</button>)}
+        </div>
+        <button className="menu-collapse" aria-label="Collapse menu" onClick={() => setControlsCollapsed(true)}>−</button>
+        <div className="builder-scroll">
+          {menuMode === "shape" && <>
+            <section className="builder-section">
+              <div className="section-number">01</div><h2>VOLUMES</h2>
+              <p>Add and configure building volumes.</p>
+              {!sel && <div className="choice-grid"><button className="primary" onClick={addVolume}>＋ CUBIFORM</button><button className="primary" onClick={addCylinder}>＋ CYLINDER</button></div>}
+              {sel && <div className="selection-note"><span>SELECTED</span><strong>{sel.shape === "cylinder" ? "CYLINDER" : "CUBIFORM"} {String(volumes.findIndex(v => v.id === sel.id) + 1).padStart(2, "0")}</strong><button onClick={() => setSelectedId(null)}>×</button></div>}
+            </section>
+            {sel && <>
+              <section className="builder-section"><div className="section-number">02</div><h2>WALLS</h2><p>Set material and dimensions.</p>
+                <div className="field-label">MATERIAL</div><div className="segmented"><button className={sel.material === "earth" ? "active" : ""} onClick={() => update({ material: "earth" })}>RAMMED EARTH</button><button className={sel.material === "lava" ? "active" : ""} onClick={() => update({ material: "lava" })}>LAVACRETE</button></div>
+                <div className="field-label">WALL THICKNESS</div><div className="segmented thirds">{[[1,'12″'],[1.5,'18″'],[2,'24″']].map(([v,n]) => <button key={v} className={sel.t === v ? "active" : ""} onClick={() => update({t:v})}>{n}</button>)}</div>
+                <div className="dimension-list">
+                  {sel.shape === "cylinder" ? <div><label>RADIUS</label><Stepper ftValue={sel.r} onDec={() => update({r: Math.max(4,sel.r-MODULE)})} onInc={() => update({r: Math.min(20,sel.r+MODULE)})}/></div> : <><div><label>WIDTH</label><Stepper ftValue={sel.w} onDec={() => update({w:Math.max(8,sel.w-MODULE)})} onInc={() => update({w:Math.min(32,sel.w+MODULE)})}/></div><div><label>DEPTH</label><Stepper ftValue={sel.d} onDec={() => update({d:Math.max(8,sel.d-MODULE)})} onInc={() => update({d:Math.min(32,sel.d+MODULE)})}/></div></>}
+                  <div><label>HEIGHT</label><Stepper ftValue={sel.h} onDec={() => update({h:Math.max(8,sel.h-1)})} onInc={() => update({h:Math.min(14,sel.h+1)})}/></div>
+                </div>
+              </section>
+              <section className="builder-section"><div className="section-number">03</div><h2>ROOFS</h2><p>Add a roof to this volume.</p><div className="segmented thirds"><button className={(sel.roof ?? 'none') === 'none' ? 'active':''} onClick={() => update({roof:'none'})}>NONE</button><button className={sel.roof === 'flat' ? 'active':''} onClick={() => update({roof:'flat'})}>FLAT</button>{sel.shape !== 'cylinder' && <button className={sel.roof === 'pitched' ? 'active':''} onClick={() => update({roof:'pitched'})}>MONO</button>}</div></section>
+              <section className="builder-section"><div className="section-number">04</div><h2>POSITION</h2><p>Orient the selected volume.</p><div className="dimension-list"><div><label>ROTATION</label><div className="rotation-control"><button onClick={() => update({rot:(sel.rot+315)%360})}>−</button><span>{sel.rot}°</span><button onClick={() => update({rot:(sel.rot+45)%360})}>＋</button></div></div></div><button className="remove-action" onClick={() => { pushUndo(); setVolumes(vs=>vs.filter(v=>v.id!==selectedId)); setSelectedId(null); }}>REMOVE VOLUME</button></section>
+            </>}
+            <button className="add-volume-footer" onClick={sel?.shape === 'cylinder' ? addCylinder : addVolume}>＋ ADD VOLUME</button>
+          </>}
+
+          {menuMode === "open" && <>{!sel && <div className="empty-state"><span>SELECT A VOLUME</span><h2>OPENINGS BEGIN<br/>WITH A WALL.</h2><p>Choose a volume in the model to add doors and windows.</p></div>}{sel && <>
+            {[['01','DOORS','door'],['02','WINDOWS','window']].map(([num,title,type]) => <section className="builder-section" key={type}><div className="section-number">{num}</div><h2>{title}</h2><p>Add a {type} to a wall.</p>{sel.shape === 'cylinder' ? <button className="primary full" onClick={() => addOpening(null,type)}>＋ ADD {type.toUpperCase()}</button> : <><div className="field-label">SELECT WALL</div><div className="wall-grid">{Object.entries(wallNames).map(([wall,name]) => <button key={wall} onClick={() => addOpening(wall,type)}>{name}<small>＋ {type.toUpperCase()}</small></button>)}</div></>}</section>)}
+            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">03</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button onClick={() => nudgeOpening(o.id,-1)}>←</button><button onClick={() => nudgeOpening(o.id,1)}>→</button><button onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
+          </>}</>}
+
+          {menuMode === "count" && <div className="count-mode"><div className="count-kicker">COUNT</div><h2>YOUR BUILD</h2><div className="big-stat"><strong>{String(volumes.length).padStart(2,'0')}</strong><span>VOLUMES</span></div><div className="big-stat"><strong>{fmt(takeoff.grand.extNetArea + takeoff.grand.intNetArea)}</strong><span>FT² FORMED</span></div><section className="count-ledger"><h3>MATERIAL TAKEOFF</h3><DataRow k="WALL VOLUME" v={`${fmt(takeoff.grand.netVolCuyd,1)} YD³`}/><DataRow k="CEMENT" v={`${Math.ceil(takeoff.grand.cementBags)} BAGS`}/>{takeoff.soilCuyd>0&&<DataRow k="EARTH" v={`${fmt(takeoff.soilCuyd,1)} YD³`}/>} {takeoff.lavaSandCuyd>0&&<DataRow k="LAVASAND" v={`${fmt(takeoff.lavaSandCuyd,1)} YD³`}/>}<DataRow k="WALL WEIGHT" v={`${fmt(takeoff.grand.weightTons,1)} TONS`}/><DataRow k="FLOOR AREA" v={formatArea(takeoff.grand.floorArea,units)}/></section><button className="export-action" onClick={downloadTakeoff}>↓ EXPORT MATERIAL TAKEOFF</button></div>}
+
+          {menuMode === "capture" && <><section className="builder-section"><div className="section-number">01</div><h2>VIEW</h2><p>Set the view for model inspection and output.</p><div className="field-label">CAMERA</div><div className="preset-grid">{[["aerial-sw","SW 3D"],["aerial-ne","NE 3D"],["eye-s","SOUTH"],["eye-w","WEST"],["top","PLAN"]].map(([k,n])=><button key={k} onClick={()=>preset(k)}>{n}</button>)}</div><div className="field-label">ROOF VISIBILITY</div><div className="segmented"><button className={showRoofs?'active':''} onClick={()=>setShowRoofs(true)}>ROOFS ON</button><button className={!showRoofs?'active':''} onClick={()=>setShowRoofs(false)}>ROOFS OFF</button></div></section><section className="builder-section"><div className="section-number">02</div><h2>FRAME</h2><p>Prepare a clean architectural output.</p><button className="outline-action" onClick={()=>setPlanOpen(true)}>OPEN DRAWING PLAN ↗</button></section><section className="builder-section"><div className="section-number">03</div><h2>CAPTURE</h2><p>Save the current model view as an image.</p><button className="capture-action" onClick={snapshot}>TAKE SCREENSHOT</button></section></>}
+        </div>
+      </aside>}
+
+      <div className={`camera-palette ${cameraPaletteOpen ? "open" : ""}`}>
+        {cameraPaletteOpen && <div className="camera-tools" role="toolbar" aria-label="Camera navigation tools">
+          <button className={cameraTool === "orbit" ? "active" : ""} onClick={() => setCameraTool("orbit")} title="Orbit — drag around the model">
+            <span className="camera-icon">↻</span><span>ORBIT</span>
+          </button>
+          <button className={cameraTool === "pan" ? "active" : ""} onClick={() => setCameraTool("pan")} title="Pan — drag the view sideways or vertically">
+            <span className="camera-icon">✥</span><span>PAN</span>
+          </button>
+          <button className={cameraTool === "look" ? "active" : ""} onClick={() => setCameraTool("look")} title="Look Around — turn from a fixed eye position">
+            <span className="camera-icon">⊙</span><span>LOOK</span>
+          </button>
+          <div className="camera-hint">DRAG VIEW · WHEEL TO ZOOM</div>
+        </div>}
+        <button className="camera-toggle" aria-label={cameraPaletteOpen ? "Close camera tools" : "Open camera tools"} aria-expanded={cameraPaletteOpen} onClick={() => setCameraPaletteOpen((v) => !v)}>
+          <span>{cameraPaletteOpen ? "×" : "⌾"}</span><small>CAMERA</small>
+        </button>
+      </div>
 
       {/* wordmark — same type treatment as the toast (monospace, 11px,
           0.02em tracking, no uppercase) */}
-      <div style={{
+      <div className="legacy-ui" style={{
         position: "absolute", top: 14, left: 16, pointerEvents: "none",
         fontFamily: "ui-monospace, monospace", fontSize: 11,
         letterSpacing: "0.02em", color: INK,
@@ -1810,7 +1946,7 @@ export default function ShelterVolumeStudy() {
       </div>
 
       {/* top-right label */}
-      <div style={{
+      <div className="legacy-ui" style={{
         position: "absolute", top: 15, right: 16, pointerEvents: "none",
         fontFamily: "ui-monospace, monospace", fontSize: 11,
         letterSpacing: "0.02em", color: INK,
@@ -1832,7 +1968,7 @@ export default function ShelterVolumeStudy() {
       )}
 
       {/* control card */}
-      {controlsCollapsed ? (
+      <div className="legacy-ui">{controlsCollapsed ? (
         <button
           onClick={() => setControlsCollapsed(false)}
           style={{
@@ -2023,11 +2159,11 @@ export default function ShelterVolumeStudy() {
           </div>
         )}
       </div>
-      )}
+      )}</div>
 
       {/* camera presets + output strip — presets on their own line, the
           output actions (snapshot/plan/takeoff) on the line below. */}
-      <div style={{
+      <div className="legacy-ui" style={{
         position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column",
         alignItems: "flex-end", gap: 6,
       }}>
@@ -2046,7 +2182,7 @@ export default function ShelterVolumeStudy() {
       {/* camera orbit — bottom-left, separate from the presets on the
           right: a continuous nudge from wherever the camera already is,
           not a jump to a fixed angle. */}
-      <div style={{ position: "absolute", bottom: 12, left: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+      <div className="legacy-ui" style={{ position: "absolute", bottom: 12, left: 12, display: "flex", flexDirection: "column", gap: 4 }}>
         <span style={{
           fontFamily: "ui-monospace, monospace", fontSize: 10, color: WHITE_DIM,
           textShadow: "0 1px 4px rgba(0,0,0,0.65)", letterSpacing: "0.02em",
