@@ -9,6 +9,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         guide: 'guide.html',
+        seeIt: 'see-it.html',
       },
     },
   },
