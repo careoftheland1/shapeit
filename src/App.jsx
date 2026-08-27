@@ -467,9 +467,17 @@ function buildVolumeGroup(vol, baseTex) {
 function wallLength(vol, wallKey) {
   return wallKey === "front" || wallKey === "back" ? vol.w : vol.d - 2 * vol.t;
 }
+// Front/back walls run the volume's full outer span, so an opening needs a
+// t clearance at each end to stay clear of the corner where a left/right
+// wall crosses it. Left/right walls are already measured *between* those
+// corners (wallLength subtracts 2*t up front), so they need no further
+// margin — adding one here would double-count the same clearance.
+function wallCornerMargin(vol, wallKey) {
+  return wallKey === "front" || wallKey === "back" ? vol.t : 0;
+}
 function clampPos(vol, wallKey, pos, width = OPEN_W) {
   const L = wallLength(vol, wallKey);
-  const max = Math.floor((L / 2 - width / 2 - vol.t) / MODULE) * MODULE;
+  const max = Math.floor((L / 2 - width / 2 - wallCornerMargin(vol, wallKey)) / MODULE) * MODULE;
   const lim = Math.max(0, max);
   return Math.min(lim, Math.max(-lim, Math.round(pos / MODULE) * MODULE));
 }
@@ -490,7 +498,7 @@ function clampOpeningWidth(vol, wallKey, width, type) {
   const minW = type === "door" ? DOOR_MIN_W : WIN_MIN_W;
   const maxW = wallKey == null
     ? Math.max(minW, 2 * Math.PI * vol.r - 4)
-    : Math.max(minW, wallLength(vol, wallKey) - 2 * vol.t);
+    : Math.max(minW, wallLength(vol, wallKey) - 2 * wallCornerMargin(vol, wallKey));
   return Math.min(maxW, Math.max(minW, roundToStep(width)));
 }
 
@@ -1541,7 +1549,7 @@ export default function ShelterVolumeStudy() {
               ? { ...o, width, height, pos, sill: clampSill(nv, o.sill ?? SILL, height) }
               : { ...o, width, height, pos };
           })
-          .filter((o) => wallLength(nv, o.wall) >= openingWidth(o) + 2 * nv.t + 1);
+          .filter((o) => wallLength(nv, o.wall) >= openingWidth(o) + 2 * wallCornerMargin(nv, o.wall) + 1);
       }
       return nv;
     }));
@@ -1908,7 +1916,7 @@ export default function ShelterVolumeStudy() {
 
           {menuMode === "open" && <>{!sel && <div className="empty-state"><span>SELECT A VOLUME</span><h2>OPENINGS BEGIN<br/>WITH A WALL.</h2><p>Choose a volume in the model to add doors and windows.</p></div>}{sel && <>
             {[['01','DOORS','door'],['02','WINDOWS','window']].map(([num,title,type]) => <section className="builder-section" key={type}><div className="section-number">{num}</div><h2>{title}</h2><p>Add a {type} to a wall.</p>{sel.shape === 'cylinder' ? <button className="primary full" onClick={() => addOpening(null,type)}>＋ ADD {type.toUpperCase()}</button> : <><div className="field-label">SELECT WALL</div><div className="wall-grid">{Object.entries(wallNames).map(([wall,name]) => <button key={wall} onClick={() => addOpening(wall,type)}>{name}<small>＋ {type.toUpperCase()}</small></button>)}</div></>}</section>)}
-            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">03</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button onClick={() => nudgeOpening(o.id,-1)}>←</button><button onClick={() => nudgeOpening(o.id,1)}>→</button><button onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
+            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">03</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button title="Move left" onClick={() => nudgeOpening(o.id,-1)}>←</button><button title="Move right" onClick={() => nudgeOpening(o.id,1)}>→</button>{o.type === 'window' && <><button title="Raise sill" onClick={() => nudgeSill(o.id,1)}>↑</button><button title="Lower sill" onClick={() => nudgeSill(o.id,-1)}>↓</button></>}<button title="Narrower" onClick={() => nudgeWidth(o.id,-1)}>w−</button><button title="Wider" onClick={() => nudgeWidth(o.id,1)}>w+</button><button title="Shorter" onClick={() => nudgeHeight(o.id,-1)}>h−</button><button title="Taller" onClick={() => nudgeHeight(o.id,1)}>h+</button><button title="Remove" onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
           </>}</>}
 
           {menuMode === "count" && <div className="count-mode"><div className="count-kicker">COUNT</div><h2>YOUR BUILD</h2><div className="big-stat"><strong>{String(volumes.length).padStart(2,'0')}</strong><span>VOLUMES</span></div><div className="big-stat"><strong>{fmt(takeoff.grand.extNetArea + takeoff.grand.intNetArea)}</strong><span>FT² FORMED</span></div><section className="count-ledger"><h3>MATERIAL TAKEOFF</h3><DataRow k="WALL VOLUME" v={`${fmt(takeoff.grand.netVolCuyd,1)} YD³`}/><DataRow k="CEMENT" v={`${Math.ceil(takeoff.grand.cementBags)} BAGS`}/>{takeoff.soilCuyd>0&&<DataRow k="EARTH" v={`${fmt(takeoff.soilCuyd,1)} YD³`}/>} {takeoff.lavaSandCuyd>0&&<DataRow k="LAVASAND" v={`${fmt(takeoff.lavaSandCuyd,1)} YD³`}/>}<DataRow k="WALL WEIGHT" v={`${fmt(takeoff.grand.weightTons,1)} TONS`}/><DataRow k="FLOOR AREA" v={formatArea(takeoff.grand.floorArea,units)}/></section><button className="export-action" onClick={downloadTakeoff}>↓ EXPORT MATERIAL TAKEOFF</button></div>}

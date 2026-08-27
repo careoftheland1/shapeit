@@ -72,8 +72,8 @@
 .opening-row { padding:12px 0; border-top:1px solid var(--rule); }
 .opening-row>div:first-child { display:flex; justify-content:space-between; font:400 9px 'Source Code Pro',monospace; }
 .opening-row span { opacity:.55; }
-.opening-actions { display:flex; justify-content:flex-end; margin-top:8px; }
-.opening-actions button { width:34px; height:28px; border:1px solid var(--rule); background:none; cursor:pointer; }
+.opening-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:4px; margin-top:8px; }
+.opening-actions button { width:34px; height:28px; border:1px solid var(--rule); background:none; cursor:pointer; font:400 10px 'Source Code Pro',monospace; }
 .count-mode { padding:32px 0 20px; }
 .count-mode h2 { font-size:32px; margin:8px 0 30px; }
 .big-stat { display:flex; align-items:baseline; gap:12px; padding:13px 0; border-top:1px solid var(--rule); }
