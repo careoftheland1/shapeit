@@ -6,6 +6,7 @@ const steps = [
     phase: "BEGIN WITH A SEED",
     copy: "Explore how volumes come together around the way life moves through space. Let four walls grow into a home, a compound, or a village.",
     action: "GROW THE PLAN",
+    url: "https://spaceit.onthe.land/",
   },
   {
     id: "shape-it",
@@ -14,6 +15,7 @@ const steps = [
     phase: "MAKE IT BUILDABLE",
     copy: "Give the plan volume. Set walls, openings, materials, and dimensions while a live takeoff keeps the physical build in view.",
     action: "BUILD THE MODEL",
+    url: "https://shapeit.onthe.land/",
   },
   {
     id: "see-it",
@@ -30,6 +32,7 @@ const steps = [
     phase: "LEARN HOW TO BUILD IT",
     copy: "Move from the chosen design to practical guidance, field lessons, plans, and support for building with earth and lavacrete.",
     action: "START THE BUILD",
+    url: "https://shelter.onthe.land/",
   },
   {
     id: "shared",
@@ -46,6 +49,7 @@ const steps = [
     phase: "OPEN THE DOOR",
     copy: "Share a finished shelter with people who value how it was made. Earn income from your build—or swap nights in shelters around the world.",
     action: "STAY ON THE LAND",
+    url: "https://stay.onthe.land/",
   },
 ];
 
@@ -86,7 +90,15 @@ export default function Guide() {
               <p className="step-phase">{step.phase}</p>
               <p className="step-copy">{step.copy}</p>
             </div>
-            <div className="step-action"><span>{step.action}</span><b>↗</b></div>
+            {step.url ? (
+              <a className="step-action" href={step.url} target="_blank" rel="noopener noreferrer">
+                <span>{step.action}</span><b>↗</b>
+              </a>
+            ) : (
+              <div className="step-action step-action-soon">
+                <span>{step.action}</span><b>SOON</b>
+              </div>
+            )}
             <div className="step-progress" aria-hidden="true">
               {steps.map((item, itemIndex) => <i className={itemIndex <= index ? "passed" : ""} key={item.id} />)}
             </div>

@@ -39,6 +39,9 @@ button { color:inherit; }
 .step-copy { max-width:390px; margin:0; font-size:11px; line-height:1.75; }
 .step-action { align-self:end; display:flex; justify-content:space-between; padding:13px 0; border-top:1px solid currentColor; font-size:8px; letter-spacing:.08em; }
 .step-action b { font-weight:400; }
+a.step-action { color:inherit; text-decoration:none; cursor:pointer; }
+a.step-action:hover { opacity:.65; }
+.step-action-soon { opacity:.45; }
 .step-progress { grid-column:1/-1; display:grid; grid-template-columns:repeat(6,1fr); gap:7px; }
 .step-progress i { height:2px; background:currentColor; opacity:.16; }
 .step-progress i.passed { background:#9c502e; opacity:1; }
