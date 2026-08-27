@@ -97,5 +97,5 @@
 .camera-tools>button.active { background:var(--ink); color:var(--paper); }
 .camera-icon { font:400 18px/1 Helvetica Neue,Helvetica,Arial,sans-serif; }
 .camera-hint { width:90px; display:flex; align-items:center; padding:0 10px; font:400 7px/1.45 'Source Code Pro',monospace; opacity:.48; }
-@media(max-width:700px){.app-bar{padding:0 10px;grid-template-columns:1fr auto auto}.project-switcher>button{padding:16px 8px}.builder-menu{left:0;top:52px;bottom:0;width:min(92vw,350px)}.builder-scroll{padding-left:18px;padding-right:18px}.app-actions{gap:0}.app-actions>button{width:27px}.more-popover{right:-4px}.menu-reopen{top:62px;left:10px}}
+@media(max-width:700px){.app-bar{padding:0 10px;grid-template-columns:1fr auto auto}.project-switcher>button{padding:16px 8px}.builder-menu{left:0;top:52px;bottom:0;width:min(68vw,260px)}.builder-scroll{padding-left:18px;padding-right:18px}.app-actions{gap:0}.app-actions>button{width:27px}.more-popover{right:-4px}.menu-reopen{top:62px;left:10px}}
 @media(max-width:700px){.camera-palette{right:10px;bottom:10px;flex-direction:column-reverse;align-items:flex-end}.camera-tools{height:auto; flex-direction:column}.camera-tools>button{width:52px;height:48px;border-right:0;border-bottom:1px solid var(--rule)}.camera-hint{display:none}.camera-toggle{width:52px;height:52px}}
