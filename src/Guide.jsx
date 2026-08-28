@@ -45,7 +45,7 @@ const steps = [
   {
     id: "stay",
     number: "06",
-    name: "STAY",
+    name: "STAY ON THE LAND",
     phase: "OPEN THE DOOR",
     copy: "Share a finished shelter with people who value how it was made. Earn income from your build—or swap nights in shelters around the world.",
     action: "STAY ON THE LAND",
@@ -108,7 +108,7 @@ export default function Guide() {
 
       <footer className="guide-footer">
         <p>THINK IT THROUGH.<br />MAKE IT REAL.</p>
-        <p>SHELTER → SPACE IT → SHAPE IT → SEE IT → SHARE IT → STAY</p>
+        <p>SHELTER → SPACE IT → SHAPE IT → SEE IT → SHARE IT → STAY ON THE LAND</p>
         <span>ON THE LAND</span>
       </footer>
     </main>
