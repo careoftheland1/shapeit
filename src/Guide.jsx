@@ -1,7 +1,16 @@
 const steps = [
   {
-    id: "space-it",
+    id: "shelter",
     number: "01",
+    name: "SHELTER",
+    phase: "LEARN HOW TO BUILD IT",
+    copy: "Move from the chosen design to practical guidance, field lessons, plans, and support for building with earth and lavacrete.",
+    action: "START THE BUILD",
+    url: "https://shelter.onthe.land/",
+  },
+  {
+    id: "space-it",
+    number: "02",
     name: "SPACE IT",
     phase: "BEGIN WITH A SEED",
     copy: "Explore how volumes come together around the way life moves through space. Let four walls grow into a home, a compound, or a village.",
@@ -10,7 +19,7 @@ const steps = [
   },
   {
     id: "shape-it",
-    number: "02",
+    number: "03",
     name: "SHAPE IT",
     phase: "MAKE IT BUILDABLE",
     copy: "Give the plan volume. Set walls, openings, materials, and dimensions while a live takeoff keeps the physical build in view.",
@@ -19,27 +28,18 @@ const steps = [
   },
   {
     id: "see-it",
-    number: "03",
+    number: "04",
     name: "SEE IT",
     phase: "SEE WHAT IT COULD BE",
     copy: "Carry Shape It views into a focused render engine. Explore light, material, atmosphere, and the feeling of being there before work begins.",
     action: "RENDER THE SHELTER",
   },
   {
-    id: "shelter",
-    number: "04",
-    name: "SHELTER",
-    phase: "LEARN HOW TO BUILD IT",
-    copy: "Move from the chosen design to practical guidance, field lessons, plans, and support for building with earth and lavacrete.",
-    action: "START THE BUILD",
-    url: "https://shelter.onthe.land/",
-  },
-  {
-    id: "shared",
+    id: "share-it",
     number: "05",
-    name: "SHARED",
+    name: "SHARE IT",
     phase: "GET THE TOOLS TOGETHER",
-    copy: "Find, organize, borrow, and return the tools a local build requires. Shared makes access part of the building system.",
+    copy: "Find, organize, borrow, and return the tools a local build requires. Share It makes access part of the building system.",
     action: "OPEN THE TOOL BANK",
   },
   {
@@ -108,7 +108,7 @@ export default function Guide() {
 
       <footer className="guide-footer">
         <p>THINK IT THROUGH.<br />MAKE IT REAL.</p>
-        <p>SPACE IT → SHAPE IT → SEE IT → SHELTER → SHARED → STAY</p>
+        <p>SHELTER → SPACE IT → SHAPE IT → SEE IT → SHARE IT → STAY</p>
         <span>ON THE LAND</span>
       </footer>
     </main>
