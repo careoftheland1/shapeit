@@ -31,6 +31,39 @@ const FT = 1;            // world units are feet
 const SANDBOX = 50;       // ft — half-extent of the buildable plot from center
 const clampCoord = (v) => Math.min(SANDBOX, Math.max(-SANDBOX, v));
 
+function volumePlanBounds(v) {
+  if (v.shape === "cylinder") {
+    return { minX: v.x - v.r, maxX: v.x + v.r, minZ: v.z - v.r, maxZ: v.z + v.r };
+  }
+  const a = (v.rot * Math.PI) / 180;
+  const hx = Math.abs(Math.cos(a)) * v.w / 2 + Math.abs(Math.sin(a)) * v.d / 2;
+  const hz = Math.abs(Math.sin(a)) * v.w / 2 + Math.abs(Math.cos(a)) * v.d / 2;
+  return { minX: v.x - hx, maxX: v.x + hx, minZ: v.z - hz, maxZ: v.z + hz };
+}
+
+function projectPlanBounds(volumes) {
+  if (!volumes.length) return { minX: -12, maxX: 12, minZ: -12, maxZ: 12 };
+  return volumes.reduce((acc, v) => {
+    const b = volumePlanBounds(v);
+    return {
+      minX: Math.min(acc.minX, b.minX), maxX: Math.max(acc.maxX, b.maxX),
+      minZ: Math.min(acc.minZ, b.minZ), maxZ: Math.max(acc.maxZ, b.maxZ),
+    };
+  }, { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+}
+
+function workspaceForLoadedVolumes(volumes) {
+  const b = projectPlanBounds(volumes);
+  const width = b.maxX - b.minX, depth = b.maxZ - b.minZ;
+  const padding = Math.max(20, Math.max(width, depth) * 0.2);
+  const halfExtent = Math.max(SANDBOX, Math.ceil((Math.max(width, depth) / 2 + padding) / MODULE) * MODULE);
+  return {
+    centerX: Math.round(((b.minX + b.maxX) / 2) / MODULE) * MODULE,
+    centerZ: Math.round(((b.minZ + b.maxZ) / 2) / MODULE) * MODULE,
+    halfExtent,
+  };
+}
+
 const ROOF_EAVE = 0;      // ft — roof overhang beyond wall face (flush)
 const ROOF_PITCH = 3 / 12; // 3:12 pitch, rise/run
 const ROOF_T = 0.3;       // ft — placeholder roof slab/panel thickness
@@ -1147,7 +1180,7 @@ export default function ShelterVolumeStudy() {
       ],
     },
   ]);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
   const [planOpen, setPlanOpen] = useState(false);
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
@@ -1164,6 +1197,8 @@ export default function ShelterVolumeStudy() {
   const [cameraTool, setCameraTool] = useState("orbit");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [workspace, setWorkspace] = useState({ centerX: 0, centerZ: 0, halfExtent: SANDBOX });
   // Small non-blocking notice — autosave restore, or a save/load result.
   const [toast, setToast] = useState(() => (initialProject ? "restored your last session" : ""));
   useEffect(() => {
@@ -1180,8 +1215,10 @@ export default function ShelterVolumeStudy() {
   const [lavaTexReady, setLavaTexReady] = useState(false);
   const volumesRef = useRef(volumes);
   volumesRef.current = volumes;
-  const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   const cameraPaletteOpenRef = useRef(cameraPaletteOpen);
   cameraPaletteOpenRef.current = cameraPaletteOpen;
   const cameraToolRef = useRef(cameraTool);
@@ -1218,7 +1255,7 @@ export default function ShelterVolumeStudy() {
       if (!h.length) return h;
       setFuture((f) => [volumesRef.current, ...f].slice(0, 50));
       setVolumes(h[h.length - 1]);
-      setSelectedId(null);
+      setSelectedIds([]);
       return h.slice(0, -1);
     });
   }, []);
@@ -1228,7 +1265,7 @@ export default function ShelterVolumeStudy() {
       if (!f.length) return f;
       setHistory((h) => [...h, volumesRef.current].slice(-50));
       setVolumes(f[0]);
-      setSelectedId(null);
+      setSelectedIds([]);
       return f.slice(1);
     });
   }, []);
@@ -1324,8 +1361,13 @@ export default function ShelterVolumeStudy() {
     const ndc = new THREE.Vector2();
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const pointers = new Map();
-    let mode = null; // 'orbit' | 'drag' | 'pinch'
-    let dragId = null, dragOffset = new THREE.Vector3(), moved = 0, pinchDist = 0;
+    let mode = null; // 'orbit' | 'drag' | 'pinch' | 'select'
+    let dragId = null, dragOffset = new THREE.Vector3(), dragStarts = [], moved = 0, pinchDist = 0;
+    const clampWorkspaceCoord = (value, axis) => {
+      const ws = workspaceRef.current;
+      const center = axis === "x" ? ws.centerX : ws.centerZ;
+      return Math.min(center + ws.halfExtent, Math.max(center - ws.halfExtent, value));
+    };
 
     const setNDC = (e) => {
       const r = renderer.domElement.getBoundingClientRect();
@@ -1359,8 +1401,15 @@ export default function ShelterVolumeStudy() {
       const hit = hits.find((h) => h.object.userData.volumeId);
       if (hit) {
         dragId = hit.object.userData.volumeId;
-        setSelectedId(dragId);
+        if (e.shiftKey) {
+          setSelectedIds((ids) => ids.includes(dragId) ? ids.filter((id) => id !== dragId) : [...ids, dragId]);
+          mode = "select";
+          return;
+        }
+        const activeIds = selectedIdsRef.current.includes(dragId) ? selectedIdsRef.current : [dragId];
+        if (!selectedIdsRef.current.includes(dragId)) setSelectedIds([dragId]);
         const v = volumesRef.current.find((v) => v.id === dragId);
+        dragStarts = volumesRef.current.filter((item) => activeIds.includes(item.id)).map((item) => ({ id: item.id, x: item.x, z: item.z }));
         const gp = groundHit(e);
         dragOffset.set(gp.x - v.x, 0, gp.z - v.z);
         mode = "drag";
@@ -1378,19 +1427,29 @@ export default function ShelterVolumeStudy() {
       if (mode === "pinch" && pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         const nd = Math.hypot(a.x - b.x, a.y - b.y);
-        cam.radius = Math.min(130, Math.max(18, cam.radius * (pinchDist / Math.max(nd, 1))));
+        cam.radius = Math.min(Math.max(130, workspaceRef.current.halfExtent * 3), Math.max(18, cam.radius * (pinchDist / Math.max(nd, 1))));
         pinchDist = nd;
         applyCam();
       } else if (mode === "drag" && dragId != null) {
         const gp = groundHit(e);
-        const rawX = clampCoord(Math.round((gp.x - dragOffset.x) / 1) * 1);
-        const rawZ = clampCoord(Math.round((gp.z - dragOffset.z) / 1) * 1);
+        const rawX = Math.round(gp.x - dragOffset.x);
+        const rawZ = Math.round(gp.z - dragOffset.z);
         const dragged = volumesRef.current.find((v) => v.id === dragId);
-        const snap = dragged ? computeSnap(dragged, volumesRef.current, rawX, rawZ) : { x: rawX, z: rawZ, guide: null };
-        const nx = clampCoord(snap.x), nz = clampCoord(snap.z);
-        const g = volGroup.children.find((c) => c.userData.volumeId === dragId);
-        if (g) g.position.set(nx, 0, nz);
-        threeRef.current.pendingPos = { id: dragId, x: nx, z: nz };
+        const activeIds = dragStarts.map((item) => item.id);
+        const snap = dragged ? computeSnap(dragged, volumesRef.current.filter((v) => !activeIds.includes(v.id)), rawX, rawZ) : { x: rawX, z: rawZ, guide: null };
+        const anchorStart = dragStarts.find((item) => item.id === dragId);
+        let dx = snap.x - anchorStart.x, dz = snap.z - anchorStart.z;
+        const selectedVolumes = volumesRef.current.filter((v) => activeIds.includes(v.id));
+        const b = projectPlanBounds(selectedVolumes);
+        const ws = workspaceRef.current;
+        dx = Math.min(ws.centerX + ws.halfExtent - b.maxX, Math.max(ws.centerX - ws.halfExtent - b.minX, dx));
+        dz = Math.min(ws.centerZ + ws.halfExtent - b.maxZ, Math.max(ws.centerZ - ws.halfExtent - b.minZ, dz));
+        const pending = dragStarts.map((item) => ({ id: item.id, x: item.x + dx, z: item.z + dz }));
+        for (const p of pending) {
+          const g = volGroup.children.find((c) => c.userData.volumeId === p.id);
+          if (g) g.position.set(p.x, 0, p.z);
+        }
+        threeRef.current.pendingPositions = pending;
 
         const gl = threeRef.current.guideLine;
         if (gl) {
@@ -1434,8 +1493,8 @@ export default function ShelterVolumeStudy() {
           const right = new THREE.Vector3().subVectors(camera.position, cam.target).cross(camera.up).normalize();
           const fwd = new THREE.Vector3().crossVectors(camera.up, right).normalize();
           cam.target.addScaledVector(right, dx * 0.06).addScaledVector(fwd, dy * 0.06);
-          cam.target.x = clampCoord(cam.target.x);
-          cam.target.z = clampCoord(cam.target.z);
+          cam.target.x = clampWorkspaceCoord(cam.target.x, "x");
+          cam.target.z = clampWorkspaceCoord(cam.target.z, "z");
         } else {
           cam.theta += dx * 0.006;
           cam.phi = Math.min(Math.PI * 0.49, Math.max(0.12, cam.phi - dy * 0.006));
@@ -1447,23 +1506,24 @@ export default function ShelterVolumeStudy() {
     const up = (e) => {
       pointers.delete(e.pointerId);
       if (mode === "drag") {
-        const p = threeRef.current.pendingPos;
-        if (p) {
+        const pending = threeRef.current.pendingPositions;
+        if (pending?.length) {
           pushUndo();
-          setVolumes((vs) => vs.map((v) => (v.id === p.id ? { ...v, x: p.x, z: p.z } : v)));
+          const byId = new Map(pending.map((p) => [p.id, p]));
+          setVolumes((vs) => vs.map((v) => byId.has(v.id) ? { ...v, x: byId.get(v.id).x, z: byId.get(v.id).z } : v));
         }
-        threeRef.current.pendingPos = null;
+        threeRef.current.pendingPositions = null;
         if (threeRef.current.guideLine) threeRef.current.guideLine.visible = false;
       } else if (mode === "orbit" && moved < 6) {
-        setSelectedId(null);
+        setSelectedIds([]);
       }
       if (pointers.size < 2 && mode === "pinch") mode = null;
-      if (pointers.size === 0) { mode = null; dragId = null; }
+      if (pointers.size === 0) { mode = null; dragId = null; dragStarts = []; }
     };
 
     const wheel = (e) => {
       e.preventDefault();
-      cam.radius = Math.min(130, Math.max(18, cam.radius * (1 + e.deltaY * 0.001)));
+      cam.radius = Math.min(Math.max(130, workspaceRef.current.halfExtent * 3), Math.max(18, cam.radius * (1 + e.deltaY * 0.001)));
       applyCam();
     };
 
@@ -1481,14 +1541,54 @@ export default function ShelterVolumeStudy() {
     const loop = () => { renderer.render(scene, camera); raf = requestAnimationFrame(loop); };
     loop();
 
-    threeRef.current = { ...threeRef.current, scene, camera, renderer, volGroup, baseTex, cam, applyCam, guideLine };
+    threeRef.current = { ...threeRef.current, scene, camera, renderer, volGroup, baseTex, cam, applyCam, guideLine, ground, grid, boundary, sun };
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.dispose();
       mount.removeChild(el);
     };
-  }, []);
+  }, [pushUndo]);
+
+  useEffect(() => {
+    const { ground, grid, boundary, scene, sun, camera } = threeRef.current;
+    if (!ground || !grid || !boundary) return;
+    const size = workspace.halfExtent * 2;
+    ground.geometry.dispose();
+    ground.geometry = new THREE.PlaneGeometry(size + 60, size + 60);
+    ground.position.set(workspace.centerX, 0, workspace.centerZ);
+    scene.remove(grid);
+    grid.geometry.dispose();
+    grid.material.dispose();
+    const nextGrid = new THREE.GridHelper(size, Math.min(500, Math.max(2, Math.round(size / MODULE))), 0xb3a888, 0xbfb397);
+    nextGrid.position.set(workspace.centerX, 0.02, workspace.centerZ);
+    nextGrid.material.opacity = 0.35;
+    nextGrid.material.transparent = true;
+    scene.add(nextGrid);
+    boundary.geometry.dispose();
+    boundary.geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(workspace.centerX - workspace.halfExtent, 0.05, workspace.centerZ - workspace.halfExtent),
+      new THREE.Vector3(workspace.centerX + workspace.halfExtent, 0.05, workspace.centerZ - workspace.halfExtent),
+      new THREE.Vector3(workspace.centerX + workspace.halfExtent, 0.05, workspace.centerZ + workspace.halfExtent),
+      new THREE.Vector3(workspace.centerX - workspace.halfExtent, 0.05, workspace.centerZ + workspace.halfExtent),
+    ]);
+    if (sun) {
+      sun.shadow.camera.left = -workspace.halfExtent * 1.5;
+      sun.shadow.camera.right = workspace.halfExtent * 1.5;
+      sun.shadow.camera.top = workspace.halfExtent * 1.5;
+      sun.shadow.camera.bottom = -workspace.halfExtent * 1.5;
+      sun.shadow.camera.updateProjectionMatrix();
+    }
+    if (camera) {
+      camera.far = Math.max(1200, workspace.halfExtent * 8);
+      camera.updateProjectionMatrix();
+    }
+    if (scene.fog) {
+      scene.fog.near = Math.max(140, workspace.halfExtent * 1.5);
+      scene.fog.far = Math.max(420, workspace.halfExtent * 5);
+    }
+    threeRef.current.grid = nextGrid;
+  }, [workspace]);
 
   useEffect(() => {
     const canvas = threeRef.current.renderer?.domElement;
@@ -1511,7 +1611,7 @@ export default function ShelterVolumeStudy() {
       volGroup.remove(c);
     }
     for (const v of volumes) volGroup.add(buildVolumeGroup(v, baseTex));
-    if (selectedId != null) {
+    for (const selectedId of selectedIds) {
       const g = volGroup.children.find((c) => c.userData.volumeId === selectedId);
       if (g) {
         const helper = new THREE.BoxHelper(g, new THREE.Color(OXIDE));
@@ -1520,9 +1620,10 @@ export default function ShelterVolumeStudy() {
       }
     }
     volGroup.traverse((o) => { if (o.userData.isRoof) o.visible = showRoofs; });
-  }, [volumes, selectedId, showRoofs, earthTexReady, lavaTexReady]);
+  }, [volumes, selectedIds, showRoofs, earthTexReady, lavaTexReady]);
 
   /* ---------- actions ---------- */
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const sel = volumes.find((v) => v.id === selectedId) || null;
 
   const update = (patch) => {
@@ -1555,6 +1656,14 @@ export default function ShelterVolumeStudy() {
     }));
   };
 
+  const removeSelected = useCallback(() => {
+    const ids = selectedIdsRef.current;
+    if (!ids.length) return;
+    pushUndo();
+    setVolumes((vs) => vs.filter((v) => !ids.includes(v.id)));
+    setSelectedIds([]);
+  }, [pushUndo]);
+
   const addVolume = () => {
     pushUndo();
     const n = volumes.length;
@@ -1564,7 +1673,7 @@ export default function ShelterVolumeStudy() {
       openings: [{ id: nid(), wall: "front", type: "door", pos: 0 }],
     };
     setVolumes((vs) => [...vs, nv]);
-    setSelectedId(nv.id);
+    setSelectedIds([nv.id]);
   };
 
   const addCylinder = () => {
@@ -1576,14 +1685,14 @@ export default function ShelterVolumeStudy() {
       openings: [{ id: nid(), type: "door", angle: 0 }],
     };
     setVolumes((vs) => [...vs, nv]);
-    setSelectedId(nv.id);
+    setSelectedIds([nv.id]);
   };
 
   const clearAll = () => {
     if (!volumes.length) return;
     pushUndo();
     setVolumes([]);
-    setSelectedId(null);
+    setSelectedIds([]);
   };
 
   const saveProject = () => {
@@ -1626,7 +1735,10 @@ export default function ShelterVolumeStudy() {
     setVolumes(obj.volumes);
     setUnits(obj.units === "metric" ? "metric" : "imperial");
     setShowRoofs(obj.showRoofs !== false);
-    setSelectedId(null);
+    setSelectedIds([]);
+    const loadedWorkspace = workspaceForLoadedVolumes(obj.volumes);
+    setWorkspace(loadedWorkspace);
+    requestAnimationFrame(() => frameAllVolumes(obj.volumes, loadedWorkspace));
     setToast("project loaded");
   };
 
@@ -1724,6 +1836,16 @@ export default function ShelterVolumeStudy() {
     if (name.startsWith("eye")) cam.target.y = 5;
     applyCam();
   };
+
+  const frameAllVolumes = useCallback((items = volumesRef.current, ws = workspaceRef.current) => {
+    const { cam, applyCam } = threeRef.current;
+    if (!cam || !applyCam) return;
+    const b = projectPlanBounds(items);
+    cam.target.set((b.minX + b.maxX) / 2, 4, (b.minZ + b.maxZ) / 2);
+    const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 24);
+    cam.radius = Math.min(ws.halfExtent * 3, Math.max(35, span * 1.35));
+    applyCam();
+  }, []);
 
   // Small continuous nudges from wherever the camera currently is —
   // distinct from `preset` above, which jumps to a fixed named angle.
@@ -1855,6 +1977,61 @@ export default function ShelterVolumeStudy() {
     URL.revokeObjectURL(a.href);
   };
 
+  const nudgeSelected = useCallback((dx, dz) => {
+    const ids = selectedIdsRef.current;
+    if (!ids.length) return;
+    const selected = volumesRef.current.filter((v) => ids.includes(v.id));
+    const b = projectPlanBounds(selected), ws = workspaceRef.current;
+    const safeDx = Math.min(ws.centerX + ws.halfExtent - b.maxX, Math.max(ws.centerX - ws.halfExtent - b.minX, dx));
+    const safeDz = Math.min(ws.centerZ + ws.halfExtent - b.maxZ, Math.max(ws.centerZ - ws.halfExtent - b.minZ, dz));
+    if (!safeDx && !safeDz) return;
+    pushUndo();
+    setVolumes((vs) => vs.map((v) => ids.includes(v.id) ? { ...v, x: v.x + safeDx, z: v.z + safeDz } : v));
+  }, [pushUndo]);
+
+  const rotateSelected = useCallback(() => {
+    const ids = selectedIdsRef.current;
+    if (!ids.length) return;
+    pushUndo();
+    setVolumes((vs) => vs.map((v) => ids.includes(v.id) ? { ...v, rot: (v.rot + 45) % 360 } : v));
+  }, [pushUndo]);
+
+  const keyboardActionsRef = useRef({});
+  keyboardActionsRef.current = { addVolume, addCylinder, frameAllVolumes, nudgeSelected, preset, redo, removeSelected, rotateSelected, saveProject, triggerLoad, undo };
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const actions = keyboardActionsRef.current;
+      const target = e.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const mod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === "z") { e.preventDefault(); if (e.shiftKey) actions.redo(); else actions.undo(); return; }
+      if (mod && key === "y") { e.preventDefault(); actions.redo(); return; }
+      if (mod && key === "s") { e.preventDefault(); actions.saveProject(); return; }
+      if (mod && key === "o") { e.preventDefault(); actions.triggerLoad(); return; }
+      if (mod && key === "a") { e.preventDefault(); setSelectedIds(volumesRef.current.map((v) => v.id)); return; }
+      if (mod || e.altKey) return;
+      if (key === "escape") { setSelectedIds([]); setShortcutsOpen(false); setPlanOpen(false); return; }
+      if (key === "delete" || key === "backspace") { e.preventDefault(); actions.removeSelected(); return; }
+      if (key === "arrowleft") { e.preventDefault(); actions.nudgeSelected(e.shiftKey ? -MODULE * 2 : -1, 0); return; }
+      if (key === "arrowright") { e.preventDefault(); actions.nudgeSelected(e.shiftKey ? MODULE * 2 : 1, 0); return; }
+      if (key === "arrowup") { e.preventDefault(); actions.nudgeSelected(0, e.shiftKey ? -MODULE * 2 : -1); return; }
+      if (key === "arrowdown") { e.preventDefault(); actions.nudgeSelected(0, e.shiftKey ? MODULE * 2 : 1); return; }
+      if (key === "c") actions.addVolume();
+      else if (key === "y") actions.addCylinder();
+      else if (key === "r") actions.rotateSelected();
+      else if (key === "o") { setCameraPaletteOpen(true); setCameraTool("orbit"); }
+      else if (key === "p") { setCameraPaletteOpen(true); setCameraTool("pan"); }
+      else if (key === "l") { setCameraPaletteOpen(true); setCameraTool("look"); }
+      else if (key === "f") actions.frameAllVolumes();
+      else if (["1", "2", "3", "4", "5"].includes(key)) actions.preset(["aerial-sw", "aerial-ne", "eye-s", "eye-w", "top"][Number(key) - 1]);
+      else if (key === "?") setShortcutsOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
     <div className="shapeit-workspace" style={{ position: "fixed", inset: 0, background: PAPER, overflow: "hidden" }}>
       <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
@@ -1880,10 +2057,19 @@ export default function ShelterVolumeStudy() {
             <div className="popover-label">UNITS</div>
             <div className="unit-choice"><button className={units === "imperial" ? "active" : ""} onClick={() => setUnits("imperial")}>IMPERIAL</button><button className={units === "metric" ? "active" : ""} onClick={() => setUnits("metric")}>METRIC</button></div>
             <button className="danger" onClick={() => { clearAll(); setMoreMenuOpen(false); }}>CLEAR PROJECT</button>
-            <button disabled>KEYBOARD CONTROLS <span>SOON</span></button>
+            <button onClick={() => { setShortcutsOpen(true); setMoreMenuOpen(false); }}>KEYBOARD CONTROLS <span>?</span></button>
           </div>}
         </div>
       </header>
+
+      {shortcutsOpen && <div style={{ position: "absolute", inset: 0, zIndex: 30, background: "rgba(38,33,25,.55)", display: "grid", placeItems: "center", padding: 20 }} onClick={() => setShortcutsOpen(false)}>
+        <section style={{ width: "min(520px, 100%)", maxHeight: "85vh", overflow: "auto", background: PAPER, color: INK, border: `1px solid ${INK}`, padding: 24 }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontFamily: "Georgia,serif", letterSpacing: ".08em" }}>KEYBOARD CONTROLS</h2><button style={btnPaper} onClick={() => setShortcutsOpen(false)}>CLOSE</button></div>
+          <div style={{ marginTop: 18, fontFamily: "ui-monospace,monospace", fontSize: 12, lineHeight: 1.8 }}>
+            {[['SHIFT + CLICK','ADD / REMOVE FROM SELECTION'],['⌘/CTRL + A','SELECT ALL VOLUMES'],['ARROW KEYS','NUDGE SELECTION 1′'],['SHIFT + ARROW','NUDGE SELECTION 4′'],['DELETE / BACKSPACE','REMOVE SELECTION'],['ESC','CLEAR SELECTION / CLOSE'],['C / Y','ADD CUBIFORM / CYLINDER'],['R','ROTATE SELECTION 45°'],['O / P / L','ORBIT / PAN / LOOK'],['1–5','CAMERA PRESETS'],['F','FRAME ALL VOLUMES'],['⌘/CTRL + Z','UNDO'],['⌘/CTRL + SHIFT + Z','REDO'],['⌘/CTRL + S / O','SAVE / OPEN PROJECT'],['?','SHOW THIS LIST']].map(([keys, action]) => <div key={keys} style={{ display: "flex", justifyContent: "space-between", gap: 20, borderBottom: "1px solid rgba(38,33,25,.18)", padding: "5px 0" }}><strong>{keys}</strong><span style={{ textAlign: "right" }}>{action}</span></div>)}
+          </div>
+        </section>
+      </div>}
 
       {controlsCollapsed ? <button className="menu-reopen" onClick={() => setControlsCollapsed(false)}>MENU <span>＋</span></button> :
       <aside className="builder-menu">
@@ -1896,8 +2082,9 @@ export default function ShelterVolumeStudy() {
             <section className="builder-section">
               <div className="section-number">01</div><h2>VOLUMES</h2>
               <p>Add and configure building volumes.</p>
-              {!sel && <div className="choice-grid"><button className="primary" onClick={addVolume}>＋ CUBIFORM</button><button className="primary" onClick={addCylinder}>＋ CYLINDER</button></div>}
-              {sel && <div className="selection-note"><span>SELECTED</span><strong>{sel.shape === "cylinder" ? "CYLINDER" : "CUBIFORM"} {String(volumes.findIndex(v => v.id === sel.id) + 1).padStart(2, "0")}</strong><button onClick={() => setSelectedId(null)}>×</button></div>}
+              {!selectedIds.length && <div className="choice-grid"><button className="primary" onClick={addVolume}>＋ CUBIFORM</button><button className="primary" onClick={addCylinder}>＋ CYLINDER</button></div>}
+              {selectedIds.length > 1 && <div className="selection-note"><span>SELECTED</span><strong>{selectedIds.length} VOLUMES</strong><button onClick={() => setSelectedIds([])}>×</button></div>}
+              {sel && <div className="selection-note"><span>SELECTED</span><strong>{sel.shape === "cylinder" ? "CYLINDER" : "CUBIFORM"} {String(volumes.findIndex(v => v.id === sel.id) + 1).padStart(2, "0")}</strong><button onClick={() => setSelectedIds([])}>×</button></div>}
             </section>
             {sel && <>
               <section className="builder-section"><div className="section-number">02</div><h2>WALLS</h2><p>Set material and dimensions.</p>
@@ -1909,8 +2096,9 @@ export default function ShelterVolumeStudy() {
                 </div>
               </section>
               <section className="builder-section"><div className="section-number">03</div><h2>ROOFS</h2><p>Add a roof to this volume.</p><div className="segmented thirds"><button className={(sel.roof ?? 'none') === 'none' ? 'active':''} onClick={() => update({roof:'none'})}>NONE</button><button className={sel.roof === 'flat' ? 'active':''} onClick={() => update({roof:'flat'})}>FLAT</button>{sel.shape !== 'cylinder' && <button className={sel.roof === 'pitched' ? 'active':''} onClick={() => update({roof:'pitched'})}>MONO</button>}</div></section>
-              <section className="builder-section"><div className="section-number">04</div><h2>POSITION</h2><p>Orient the selected volume.</p><div className="dimension-list"><div><label>ROTATION</label><div className="rotation-control"><button onClick={() => update({rot:(sel.rot+315)%360})}>−</button><span>{sel.rot}°</span><button onClick={() => update({rot:(sel.rot+45)%360})}>＋</button></div></div></div><button className="remove-action" onClick={() => { pushUndo(); setVolumes(vs=>vs.filter(v=>v.id!==selectedId)); setSelectedId(null); }}>REMOVE VOLUME</button></section>
+              <section className="builder-section"><div className="section-number">04</div><h2>POSITION</h2><p>Orient the selected volume.</p><div className="dimension-list"><div><label>ROTATION</label><div className="rotation-control"><button onClick={() => update({rot:(sel.rot+315)%360})}>−</button><span>{sel.rot}°</span><button onClick={() => update({rot:(sel.rot+45)%360})}>＋</button></div></div></div><button className="remove-action" onClick={removeSelected}>REMOVE VOLUME</button></section>
             </>}
+            {selectedIds.length > 1 && <section className="builder-section"><div className="section-number">02</div><h2>GROUP</h2><p>Drag any selected volume to move the group while preserving its layout.</p><button className="outline-action" onClick={rotateSelected}>ROTATE EACH 45°</button><button className="remove-action" onClick={removeSelected}>REMOVE {selectedIds.length} VOLUMES</button></section>}
             <button className="add-volume-footer" onClick={sel?.shape === 'cylinder' ? addCylinder : addVolume}>＋ ADD VOLUME</button>
           </>}
 
@@ -2156,7 +2344,7 @@ export default function ShelterVolumeStudy() {
 
             <div style={{ marginTop: 12 }}>
               <button style={{ ...btn, width: "100%", textAlign: "left" }}
-                onClick={() => { pushUndo(); setVolumes((vs) => vs.filter((v) => v.id !== selectedId)); setSelectedId(null); }}>
+                onClick={removeSelected}>
                 remove volume
               </button>
             </div>
