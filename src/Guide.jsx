@@ -84,7 +84,7 @@ export default function Guide() {
           <section className="journey-step" id={step.id} key={step.id}>
             <header>
               <span className="step-number">{step.number}</span>
-              <h2>{step.name}</h2>
+              <h2>{step.id === "stay" ? <>STAY<br />ON THE LAND</> : step.name}</h2>
             </header>
             <div className="step-body">
               <p className="step-phase">{step.phase}</p>
