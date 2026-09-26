@@ -44,6 +44,7 @@
 .builder-section p,.empty-state p { margin:12px 0 18px 46px; max-width:245px; font:400 9px/1.55 'Source Code Pro',monospace; opacity:.62; }
 .empty-state p { margin-left:0; }
 .choice-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+.choice-grid.three { grid-template-columns:1fr 1fr 1fr; }
 .primary,.capture-action { border:1px solid var(--ink); background:var(--ink); color:var(--paper)!important; padding:14px 9px; font:400 9px 'Source Code Pro',monospace; letter-spacing:.04em; cursor:pointer; }
 .primary:hover,.capture-action:hover { background:var(--oxide); border-color:var(--oxide); }
 .primary.full { width:100%; }
@@ -70,6 +71,11 @@
 .wall-grid button:hover { background:var(--ink); color:var(--paper); }
 .wall-grid small { font-size:7px; letter-spacing:.07em; }
 .opening-row { padding:12px 0; border-top:1px solid var(--rule); }
+.wall-opening-summary { padding:12px 0; border-top:1px solid var(--rule); }
+.wall-opening-summary>span { display:block; font:400 9px 'Source Code Pro',monospace; line-height:1.5; }
+.wall-opening-summary>div { display:flex; gap:6px; margin-top:9px; }
+.wall-opening-summary button { flex:1; min-height:30px; border:1px solid var(--rule); background:none; font:400 9px 'Source Code Pro',monospace; cursor:pointer; }
+.wall-opening-summary button:hover { background:var(--ink); color:var(--paper); }
 .opening-row>div:first-child { display:flex; justify-content:space-between; font:400 9px 'Source Code Pro',monospace; }
 .opening-row span { opacity:.55; }
 .opening-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:4px; margin-top:8px; }

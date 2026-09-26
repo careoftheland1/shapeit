@@ -6,7 +6,7 @@ import csreTextureUrl from "./assets/csre-texture.jpg";
 /* ============================================================
    SHELTER ON THE LAND — volume study
    Kit-of-parts configurator: rammed earth / lavacrete volumes,
-   cubiform or cylinder, 12"/18"/24" walls, module-snapped openings,
+   cubiform, cylinder, or freestanding straight wall; module-snapped openings,
    flat or 3:12 mono-slope roofs, wall-proximity snapping, napkin
    plan export. Module = 2'. Door 4' wide. Window 4' wide, sill 3',
    head 7'.
@@ -27,6 +27,22 @@ const SILL = 3;          // ft — default window sill (bottom of opening)
 const HEAD = 7;          // ft — default door height (floor to head)
 const WIN_H = HEAD - SILL; // ft — default window height
 const openingHeight = (o) => o.height ?? (o.type === "window" ? WIN_H : HEAD);
+// Older saved straight walls have no batterMode; they keep the original
+// symmetric batter. Inset is measured horizontally at the wall top.
+const wallBatterMode = (v) => v.batterMode ?? "both";
+function wallBatterInsets(v) {
+  const batter = v.batter ?? 0;
+  const mode = wallBatterMode(v);
+  return {
+    front: mode === "front-flat" ? 0 : batter,
+    back: mode === "back-flat" ? 0 : batter,
+  };
+}
+const wallBatterLimit = (v) => v.d / (wallBatterMode(v) === "both" ? 2 : 1);
+const wallTopWidth = (v) => {
+  const { front, back } = wallBatterInsets(v);
+  return Math.round(Math.max(0, v.d - front - back) * 100) / 100;
+};
 const FT = 1;            // world units are feet
 const SANDBOX = 50;       // ft — half-extent of the buildable plot from center
 const clampCoord = (v) => Math.min(SANDBOX, Math.max(-SANDBOX, v));
@@ -121,7 +137,7 @@ function validateProject(obj) {
   if (!Array.isArray(obj.volumes)) return "missing volumes";
   for (const v of obj.volumes) {
     if (!v || typeof v !== "object") return "a volume entry is malformed";
-    if (v.shape !== "cubiform" && v.shape !== "cylinder") return "a volume has an invalid shape";
+    if (v.shape !== "cubiform" && v.shape !== "cylinder" && v.shape !== "wall") return "a volume has an invalid shape";
     if (v.material !== "earth" && v.material !== "lava") return "a volume has an invalid material";
     if (typeof v.x !== "number" || typeof v.z !== "number" || typeof v.h !== "number" || typeof v.t !== "number" || typeof v.rot !== "number") {
       return "a volume is missing required numeric fields";
@@ -129,7 +145,19 @@ function validateProject(obj) {
     if (v.shape === "cylinder" ? typeof v.r !== "number" : (typeof v.w !== "number" || typeof v.d !== "number")) {
       return "a volume is missing footprint dimensions";
     }
+    if (v.shape === "wall" && (![v.x, v.z, v.h, v.t, v.rot, v.w, v.d, v.batter].every(Number.isFinite) ||
+      !["both", "front-flat", "back-flat"].includes(wallBatterMode(v)) || v.batter < 0 ||
+      v.batter > wallBatterLimit(v) || v.w <= 0 || v.d <= 0 || v.h <= 0)) {
+      return "a straight wall has invalid dimensions or batter";
+    }
     if (!Array.isArray(v.openings)) return "a volume is missing its openings array";
+    if (v.shape === "wall" && v.openings.some((o) => {
+      if (!o || o.wall !== "front" || (o.type !== "door" && o.type !== "window") || !Number.isFinite(o.pos)) return true;
+      const width = openingWidth(o), height = openingHeight(o);
+      const sill = o.type === "window" ? o.sill ?? SILL : 0;
+      return ![width, height, sill].every(Number.isFinite) || width <= 0 || height <= 0 || sill < 0 ||
+        Math.abs(o.pos) + width / 2 > v.w / 2 || sill + height > v.h;
+    })) return "a straight wall has an invalid opening";
   }
   return null;
 }
@@ -285,6 +313,7 @@ function clampAngle(vol, angleRad) {
 // Cylinders only support the flat option — a single slope has no sensible
 // mapping onto a circular plan.
 function buildRoofGroup(vol) {
+  if (vol.shape === "wall") return null;
   if (!vol.roof || vol.roof === "none") return null;
   const { h } = vol;
   const roofGroup = new THREE.Group();
@@ -356,9 +385,21 @@ function buildVolumeGroup(vol, baseTex) {
   const { h, t } = vol;
   const tex = baseTex[vol.material];
 
-  const mkMesh = (box, yBottomOffset = 0) => {
+  const mkMesh = (box, yBottomOffset = 0, taper = null) => {
     const [sx, sy, sz] = box.size;
     const geo = new THREE.BoxGeometry(sx, sy, sz);
+    if (taper && (taper.front || taper.back)) {
+      const positions = geo.getAttribute("position");
+      for (let i = 0; i < positions.count; i++) {
+        const globalY = box.pos[1] + positions.getY(i);
+        const front = positions.getZ(i) > 0;
+        positions.setZ(i, front
+          ? sz / 2 - taper.front * globalY / h
+          : -sz / 2 + taper.back * globalY / h);
+      }
+      positions.needsUpdate = true;
+      geo.computeVertexNormals();
+    }
     const map = tex.clone();
     map.needsUpdate = true;
     const vSpan = WALL_TEX_V_SPAN[vol.material];
@@ -374,6 +415,14 @@ function buildVolumeGroup(vol, baseTex) {
     m.userData.volumeId = vol.id;
     return m;
   };
+
+  if (vol.shape === "wall") {
+    // Each opening cuts the entire wall thickness. The two long faces can
+    // taper independently, so either face may stay flat or both may meet.
+    const taper = wallBatterInsets(vol);
+    for (const box of wallBoxes(vol.w, h, vol.d, vol.openings)) group.add(mkMesh(box, 0, taper));
+    return group;
+  }
 
   if (vol.shape === "cylinder") {
     const { r } = vol;
@@ -506,6 +555,7 @@ function wallLength(vol, wallKey) {
 // corners (wallLength subtracts 2*t up front), so they need no further
 // margin — adding one here would double-count the same clearance.
 function wallCornerMargin(vol, wallKey) {
+  if (vol.shape === "wall") return 0;
   return wallKey === "front" || wallKey === "back" ? vol.t : 0;
 }
 function clampPos(vol, wallKey, pos, width = OPEN_W) {
@@ -599,13 +649,13 @@ function facingSnap(axis, dExt, nx, nz, ov, oExt) {
 // are in range so one drag doesn't get yanked by a distant match.
 function computeSnap(dragged, others, nx, nz) {
   const none = { x: nx, z: nz, guide: null, kind: null };
-  if (dragged.shape === "cylinder") return none;
+  if (dragged.shape !== "cubiform") return none;
   if (((dragged.rot % 90) + 90) % 90 !== 0) return none;
   const dExt = rectExtent(dragged);
   let best = null;
   for (const ov of others) {
     if (ov.id === dragged.id) continue;
-    if (ov.shape === "cylinder") continue;
+    if (ov.shape !== "cubiform") continue;
     if (((ov.rot % 90) + 90) % 90 !== 0) continue;
     const oExt = rectExtent(ov);
     for (const axis of ["x", "z"]) {
@@ -643,6 +693,7 @@ const TAKEOFF_DEFAULTS = {
 // inner — averaging them) times thickness. Using the outer perimeter here
 // would double-count the four corners.
 function wallFootprintArea(vol) {
+  if (vol.shape === "wall") return vol.w * vol.d;
   if (vol.shape === "cylinder") {
     const { r, t } = vol;
     return Math.PI * (r * r - (r - t) * (r - t));
@@ -653,6 +704,7 @@ function wallFootprintArea(vol) {
 }
 
 function wallPerimeters(vol) {
+  if (vol.shape === "wall") return { ext: 2 * (vol.w + vol.d), int: 0 };
   if (vol.shape === "cylinder") {
     const { r, t } = vol;
     return { ext: 2 * Math.PI * r, int: 2 * Math.PI * (r - t) };
@@ -663,13 +715,19 @@ function wallPerimeters(vol) {
 
 function volumeTakeoff(vol, settings) {
   const { h, t, material } = vol;
-  const grossVol = wallFootprintArea(vol) * h;
+  const insets = vol.shape === "wall" ? wallBatterInsets(vol) : null;
+  const topInset = insets ? insets.front + insets.back : 0;
+  const grossVol = vol.shape === "wall" ? vol.w * h * (vol.d - topInset / 2) : wallFootprintArea(vol) * h;
   const perims = wallPerimeters(vol);
 
   let openingVol = 0, openingArea = 0;
   for (const o of vol.openings) {
     const ow = openingWidth(o), oh = openingHeight(o);
-    openingVol += ow * oh * t;
+    const sill = o.type === "window" ? o.sill ?? SILL : 0;
+    const thickness = vol.shape === "wall"
+      ? vol.d - topInset * (sill + oh / 2) / h
+      : t;
+    openingVol += ow * oh * thickness;
     openingArea += ow * oh;
   }
 
@@ -688,9 +746,12 @@ function volumeTakeoff(vol, settings) {
   const aggLb = Math.max(0, weightLb - cementLb);
   const aggCuyd = aggLb / aggDensity / CUFT_PER_CUYD;
 
-  const extNetArea = Math.max(0, perims.ext * h - openingArea);
-  const intNetArea = Math.max(0, perims.int * h - openingArea);
-  const floorArea = vol.shape === "cylinder"
+  const extNetArea = vol.shape === "wall"
+    ? Math.max(0, vol.w * (Math.hypot(h, insets.front) + Math.hypot(h, insets.back)) +
+      2 * h * (vol.d - topInset / 2) - 2 * openingArea)
+    : Math.max(0, perims.ext * h - openingArea);
+  const intNetArea = vol.shape === "wall" ? 0 : Math.max(0, perims.int * h - openingArea);
+  const floorArea = vol.shape === "wall" ? 0 : vol.shape === "cylinder"
     ? Math.PI * (vol.r - t) * (vol.r - t)
     : (vol.w - 2 * t) * (vol.d - 2 * t);
 
@@ -780,7 +841,9 @@ function formatArea(sqft, units) {
 // unicode (not &#...; entities) so this drops straight into JSX text as
 // well as the SVG markup string.
 function volumeDesc(v, units) {
-  return v.shape === "cylinder"
+  return v.shape === "wall"
+    ? `STRAIGHT WALL ${formatFeet(v.w, units)} × ${formatFeet(v.d, units)} · H ${formatFeet(v.h, units)} · BATTER ${formatFeet(v.batter ?? 0, units)} ${wallBatterMode(v) === "both" ? "BOTH FACES" : wallBatterMode(v) === "front-flat" ? "FRONT FLAT" : "BACK FLAT"}`
+    : v.shape === "cylinder"
     ? `⌀ ${formatFeet(v.r * 2, units)} · ${formatThickness(v.t, units)} ${v.material === "earth" ? "CSRE" : "LAVACRETE"} · H ${formatFeet(v.h, units)}`
     : `${formatFeet(v.w, units)} × ${formatFeet(v.d, units)} · ${formatThickness(v.t, units)} ${v.material === "earth" ? "CSRE" : "LAVACRETE"} · H ${formatFeet(v.h, units)}`;
 }
@@ -852,7 +915,7 @@ function hasCloseNeighbor(volumes, v, dirAxis, dirSign) {
 // their footprints into a shared string would need cross-rotation edge
 // math this pass doesn't attempt.
 function buildDimChains(volumes, axis) {
-  const eligible = volumes.filter((v) => v.shape !== "cylinder" && v.rot === 0);
+  const eligible = volumes.filter((v) => v.shape === "cubiform" && v.rot === 0);
   const sorted = [...eligible].sort((a, b) => (axis === "x" ? a.x - b.x : a.z - b.z));
   const chains = [];
   let current = [];
@@ -1037,8 +1100,8 @@ function planSVG(volumes, units = "imperial") {
     if (type === "door") {
       return `<line x1="${px(a)}" y1="${-px(t / 2)}" x2="${px(a)}" y2="${px(t / 2)}" stroke="${INK}" stroke-width="1"/>
         <line x1="${px(b)}" y1="${-px(t / 2)}" x2="${px(b)}" y2="${px(t / 2)}" stroke="${INK}" stroke-width="1"/>
-        <line x1="${px(a)}" y1="${-px(t / 2)}" x2="${px(a)}" y2="${-px(t / 2 + OPEN_W)}" stroke="${INK}" stroke-width="1.2"/>
-        <path d="M ${px(a)} ${-px(t / 2 + OPEN_W)} A ${px(OPEN_W)} ${px(OPEN_W)} 0 0 1 ${px(b)} ${-px(t / 2)}" fill="none" stroke="${INK}" stroke-width="0.7" stroke-dasharray="3 3"/>`;
+        <line x1="${px(a)}" y1="${-px(t / 2)}" x2="${px(a)}" y2="${-px(t / 2 + (b - a))}" stroke="${INK}" stroke-width="1.2"/>
+        <path d="M ${px(a)} ${-px(t / 2 + (b - a))} A ${px(b - a)} ${px(b - a)} 0 0 1 ${px(b)} ${-px(t / 2)}" fill="none" stroke="${INK}" stroke-width="0.7" stroke-dasharray="3 3"/>`;
     }
     return `<line x1="${px(a)}" y1="${-px(t / 2)}" x2="${px(b)}" y2="${-px(t / 2)}" stroke="${INK}" stroke-width="1"/>
       <line x1="${px(a)}" y1="${px(t / 2)}" x2="${px(b)}" y2="${px(t / 2)}" stroke="${INK}" stroke-width="1"/>
@@ -1050,7 +1113,26 @@ function planSVG(volumes, units = "imperial") {
   for (const v of volumes) {
     s += `<g transform="translate(${px(v.x - minX)} ${px(v.z - minY)}) rotate(${-v.rot})">`;
 
-    if (v.shape === "cylinder") {
+    if (v.shape === "wall") {
+      // A freestanding wall is a solid strip, with a through-opening cut
+      // across its full base width. The dashed inner lines mark the top
+      // faces after batter; there is no room-shaped poché or floor area.
+      s += `<rect x="${-px(v.w / 2)}" y="${-px(v.d / 2)}" width="${px(v.w)}" height="${px(v.d)}" fill="${INK}"/>`;
+      if (v.batter > 0) {
+        const { front, back } = wallBatterInsets(v);
+        if (back) s += `<line x1="${-px(v.w / 2)}" y1="${-px(v.d / 2 - back)}" x2="${px(v.w / 2)}" y2="${-px(v.d / 2 - back)}" stroke="${PAPER}" stroke-dasharray="5 4"/>`;
+        if (front) s += `<line x1="${-px(v.w / 2)}" y1="${px(v.d / 2 - front)}" x2="${px(v.w / 2)}" y2="${px(v.d / 2 - front)}" stroke="${PAPER}" stroke-dasharray="5 4"/>`;
+      }
+      for (const o of v.openings) {
+        const ow = openingWidth(o);
+        s += `<rect x="${px(o.pos - ow / 2)}" y="${-px(v.d / 2 + 0.1)}" width="${px(ow)}" height="${px(v.d + 0.2)}" fill="${PAPER}"/>`;
+        s += `<g transform="translate(${px(o.pos)} 0)">${openingGlyph(-ow / 2, ow / 2, v.d, o.type)}</g>`;
+      }
+      dimMarkup += `<g transform="translate(${px(v.x - minX)} ${px(v.z - minY)}) rotate(${-v.rot})">`;
+      dimMarkup += dimString([-v.w / 2, v.w / 2], v.d / 2, "x", 1, DIM_OFFSET_2, true, 0, 0);
+      dimMarkup += dimString([-v.d / 2, v.d / 2], -v.w / 2, "z", -1, DIM_OFFSET_2, true, 0, 0);
+      dimMarkup += `</g>`;
+    } else if (v.shape === "cylinder") {
       const circlePath = (rad) =>
         `M ${px(rad)} 0 A ${px(rad)} ${px(rad)} 0 1 0 ${-px(rad)} 0 A ${px(rad)} ${px(rad)} 0 1 0 ${px(rad)} 0 Z`;
       // ring poché
@@ -1631,6 +1713,11 @@ export default function ShelterVolumeStudy() {
     setVolumes((vs) => vs.map((v) => {
       if (v.id !== selectedId) return v;
       const nv = { ...v, ...patch };
+      if (nv.shape === "wall") {
+        nv.t = nv.d;
+        nv.roof = "none";
+        nv.batter = Math.round(Math.max(0, Math.min(nv.batter ?? 0, wallBatterLimit(nv))) * 100) / 100;
+      }
       if (nv.shape === "cylinder") {
         nv.openings = nv.openings.map((o) => {
           const width = clampOpeningWidth(nv, null, o.width ?? OPEN_W, o.type);
@@ -1683,6 +1770,18 @@ export default function ShelterVolumeStudy() {
       id: nid(), shape: "cylinder", x: clampCoord((n % 3) * 22 - 22), z: clampCoord(Math.floor(n / 3) * 18), r: 8, h: 9, t: 1.5,
       rot: 0, material: "earth", roof: "none",
       openings: [{ id: nid(), type: "door", angle: 0 }],
+    };
+    setVolumes((vs) => [...vs, nv]);
+    setSelectedIds([nv.id]);
+  };
+
+  const addWall = () => {
+    pushUndo();
+    const n = volumes.length;
+    const nv = {
+      id: nid(), shape: "wall", x: clampCoord(n % 2 ? 26 : -26), z: clampCoord(Math.floor(n / 2) * 12),
+      w: 24, d: 1.5, h: 9, t: 1.5, batter: 0, batterMode: "front-flat", rot: 0, material: "earth", roof: "none",
+      openings: [{ id: nid(), wall: "front", type: "door", pos: 0, width: 3, height: 7 }],
     };
     setVolumes((vs) => [...vs, nv]);
     setSelectedIds([nv.id]);
@@ -1744,6 +1843,7 @@ export default function ShelterVolumeStudy() {
 
   const addOpening = (wall, type) => {
     if (!sel) return;
+    if (sel.shape === "wall") wall = "front";
     if (sel.shape === "cylinder") {
       const halfOpenAngle = (OPEN_W / 2) / sel.r;
       const taken = sel.openings.map((o) => o.angle);
@@ -1759,6 +1859,7 @@ export default function ShelterVolumeStudy() {
     const taken = sel.openings.filter((o) => o.wall === wall).map((o) => o.pos);
     let p = pos, tries = 0;
     while (taken.some((tp) => Math.abs(tp - p) < OPEN_W) && tries < 12) { p = clampPos(sel, wall, p + OPEN_W); tries++; }
+    if (sel.shape === "wall" && taken.some((tp) => Math.abs(tp - p) < OPEN_W)) { setToast("no room for another opening"); return; }
     const opening = { id: nid(), wall, type, pos: p };
     if (type === "window") opening.sill = SILL;
     update({ openings: [...sel.openings, opening] });
@@ -1997,7 +2098,7 @@ export default function ShelterVolumeStudy() {
   }, [pushUndo]);
 
   const keyboardActionsRef = useRef({});
-  keyboardActionsRef.current = { addVolume, addCylinder, frameAllVolumes, nudgeSelected, preset, redo, removeSelected, rotateSelected, saveProject, triggerLoad, undo };
+  keyboardActionsRef.current = { addVolume, addCylinder, addWall, frameAllVolumes, nudgeSelected, preset, redo, removeSelected, rotateSelected, saveProject, triggerLoad, undo };
 
   useEffect(() => {
     const onKeyDown = (e) => {
@@ -2020,6 +2121,7 @@ export default function ShelterVolumeStudy() {
       if (key === "arrowdown") { e.preventDefault(); actions.nudgeSelected(0, e.shiftKey ? MODULE * 2 : 1); return; }
       if (key === "c") actions.addVolume();
       else if (key === "y") actions.addCylinder();
+      else if (key === "w") actions.addWall();
       else if (key === "r") actions.rotateSelected();
       else if (key === "o") { setCameraPaletteOpen(true); setCameraTool("orbit"); }
       else if (key === "p") { setCameraPaletteOpen(true); setCameraTool("pan"); }
@@ -2066,7 +2168,7 @@ export default function ShelterVolumeStudy() {
         <section style={{ width: "min(520px, 100%)", maxHeight: "85vh", overflow: "auto", background: PAPER, color: INK, border: `1px solid ${INK}`, padding: 24 }} onClick={(e) => e.stopPropagation()}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontFamily: "Georgia,serif", letterSpacing: ".08em" }}>KEYBOARD CONTROLS</h2><button style={btnPaper} onClick={() => setShortcutsOpen(false)}>CLOSE</button></div>
           <div style={{ marginTop: 18, fontFamily: "ui-monospace,monospace", fontSize: 12, lineHeight: 1.8 }}>
-            {[['SHIFT + CLICK','ADD / REMOVE FROM SELECTION'],['⌘/CTRL + A','SELECT ALL VOLUMES'],['ARROW KEYS','NUDGE SELECTION 1′'],['SHIFT + ARROW','NUDGE SELECTION 4′'],['DELETE / BACKSPACE','REMOVE SELECTION'],['ESC','CLEAR SELECTION / CLOSE'],['C / Y','ADD CUBIFORM / CYLINDER'],['R','ROTATE SELECTION 45°'],['O / P / L','ORBIT / PAN / LOOK'],['1–5','CAMERA PRESETS'],['F','FRAME ALL VOLUMES'],['⌘/CTRL + Z','UNDO'],['⌘/CTRL + SHIFT + Z','REDO'],['⌘/CTRL + S / O','SAVE / OPEN PROJECT'],['?','SHOW THIS LIST']].map(([keys, action]) => <div key={keys} style={{ display: "flex", justifyContent: "space-between", gap: 20, borderBottom: "1px solid rgba(38,33,25,.18)", padding: "5px 0" }}><strong>{keys}</strong><span style={{ textAlign: "right" }}>{action}</span></div>)}
+            {[['SHIFT + CLICK','ADD / REMOVE FROM SELECTION'],['⌘/CTRL + A','SELECT ALL VOLUMES'],['ARROW KEYS','NUDGE SELECTION 1′'],['SHIFT + ARROW','NUDGE SELECTION 4′'],['DELETE / BACKSPACE','REMOVE SELECTION'],['ESC','CLEAR SELECTION / CLOSE'],['C / Y / W','ADD CUBIFORM / CYLINDER / WALL'],['R','ROTATE SELECTION 45°'],['O / P / L','ORBIT / PAN / LOOK'],['1–5','CAMERA PRESETS'],['F','FRAME ALL VOLUMES'],['⌘/CTRL + Z','UNDO'],['⌘/CTRL + SHIFT + Z','REDO'],['⌘/CTRL + S / O','SAVE / OPEN PROJECT'],['?','SHOW THIS LIST']].map(([keys, action]) => <div key={keys} style={{ display: "flex", justifyContent: "space-between", gap: 20, borderBottom: "1px solid rgba(38,33,25,.18)", padding: "5px 0" }}><strong>{keys}</strong><span style={{ textAlign: "right" }}>{action}</span></div>)}
           </div>
         </section>
       </div>}
@@ -2082,29 +2184,51 @@ export default function ShelterVolumeStudy() {
             <section className="builder-section">
               <div className="section-number">01</div><h2>VOLUMES</h2>
               <p>Add and configure building volumes.</p>
-              {!selectedIds.length && <div className="choice-grid"><button className="primary" onClick={addVolume}>＋ CUBIFORM</button><button className="primary" onClick={addCylinder}>＋ CYLINDER</button></div>}
+              {!selectedIds.length && <div className="choice-grid three"><button className="primary" onClick={addVolume}>＋ CUBIFORM</button><button className="primary" onClick={addCylinder}>＋ CYLINDER</button><button className="primary" onClick={addWall}>＋ STRAIGHT WALL</button></div>}
               {selectedIds.length > 1 && <div className="selection-note"><span>SELECTED</span><strong>{selectedIds.length} VOLUMES</strong><button onClick={() => setSelectedIds([])}>×</button></div>}
-              {sel && <div className="selection-note"><span>SELECTED</span><strong>{sel.shape === "cylinder" ? "CYLINDER" : "CUBIFORM"} {String(volumes.findIndex(v => v.id === sel.id) + 1).padStart(2, "0")}</strong><button onClick={() => setSelectedIds([])}>×</button></div>}
+              {sel && <div className="selection-note"><span>SELECTED</span><strong>{sel.shape === "cylinder" ? "CYLINDER" : sel.shape === "wall" ? "STRAIGHT WALL" : "CUBIFORM"} {String(volumes.findIndex(v => v.id === sel.id) + 1).padStart(2, "0")}</strong><button onClick={() => setSelectedIds([])}>×</button></div>}
             </section>
             {sel && <>
-              <section className="builder-section"><div className="section-number">02</div><h2>WALLS</h2><p>Set material and dimensions.</p>
+              {sel.shape === "wall" && <section className="builder-section">
+                <div className="section-number">02</div><h2>OPENINGS</h2>
+                <p>Doors and windows cut through this wall.</p>
+                {sel.openings.length === 0 && <div className="field-label">NO OPENINGS</div>}
+                {sel.openings.map((opening) => <div className="wall-opening-summary" key={opening.id}>
+                  <span>{opening.type.toUpperCase()} · {openingWidth(opening)}′ × {openingHeight(opening)}′ · {opening.pos >= 0 ? "+" : ""}{opening.pos}′</span>
+                  <div>
+                    <button onClick={() => setMenuMode("open")}>EDIT</button>
+                    <button aria-label={`Remove ${opening.type} opening`} onClick={() => update({ openings: sel.openings.filter((item) => item.id !== opening.id) })}>REMOVE</button>
+                  </div>
+                </div>)}
+                <button className="outline-action" onClick={() => setMenuMode("open")}>＋ {sel.openings.length ? "ADD ANOTHER OPENING" : "ADD AN OPENING"} ↗</button>
+              </section>}
+              <section className="builder-section"><div className="section-number">{sel.shape === "wall" ? "03" : "02"}</div><h2>WALLS</h2><p>Set material and dimensions.</p>
                 <div className="field-label">MATERIAL</div><div className="segmented"><button className={sel.material === "earth" ? "active" : ""} onClick={() => update({ material: "earth" })}>RAMMED EARTH</button><button className={sel.material === "lava" ? "active" : ""} onClick={() => update({ material: "lava" })}>LAVACRETE</button></div>
-                <div className="field-label">WALL THICKNESS</div><div className="segmented thirds">{[[1,'12″'],[1.5,'18″'],[2,'24″']].map(([v,n]) => <button key={v} className={sel.t === v ? "active" : ""} onClick={() => update({t:v})}>{n}</button>)}</div>
+                {sel.shape !== "wall" && <><div className="field-label">WALL THICKNESS</div><div className="segmented thirds">{[[1,'12″'],[1.5,'18″'],[2,'24″']].map(([v,n]) => <button key={v} className={sel.t === v ? "active" : ""} onClick={() => update({t:v})}>{n}</button>)}</div></>}
+                {sel.shape === "wall" && <>
+                  <div className="field-label">BATTER PROFILE</div>
+                  <div className="segmented thirds">
+                    {[["both", "BOTH SLOPE"], ["front-flat", "FRONT FLAT"], ["back-flat", "BACK FLAT"]].map(([mode, name]) =>
+                      <button key={mode} className={wallBatterMode(sel) === mode ? "active" : ""} onClick={() => update({ batterMode: mode })}>{name}</button>)}
+                  </div>
+                  <p style={{ margin: "-8px 0 12px 0" }}>Inset is measured at the top of each sloping face. Front and back rotate with the wall.</p>
+                </>}
                 <div className="dimension-list">
-                  {sel.shape === "cylinder" ? <div><label>RADIUS</label><Stepper ftValue={sel.r} onDec={() => update({r: Math.max(4,sel.r-MODULE)})} onInc={() => update({r: Math.min(20,sel.r+MODULE)})}/></div> : <><div><label>WIDTH</label><Stepper ftValue={sel.w} onDec={() => update({w:Math.max(8,sel.w-MODULE)})} onInc={() => update({w:Math.min(32,sel.w+MODULE)})}/></div><div><label>DEPTH</label><Stepper ftValue={sel.d} onDec={() => update({d:Math.max(8,sel.d-MODULE)})} onInc={() => update({d:Math.min(32,sel.d+MODULE)})}/></div></>}
-                  <div><label>HEIGHT</label><Stepper ftValue={sel.h} onDec={() => update({h:Math.max(8,sel.h-1)})} onInc={() => update({h:Math.min(14,sel.h+1)})}/></div>
+                  {sel.shape === "cylinder" ? <div><label>RADIUS</label><Stepper ftValue={sel.r} onDec={() => update({r: Math.max(4,sel.r-MODULE)})} onInc={() => update({r: Math.min(20,sel.r+MODULE)})}/></div> : sel.shape === "wall" ? <><div><label>LENGTH</label><Stepper ftValue={sel.w} onDec={() => update({w:Math.max(6,sel.w-MODULE)})} onInc={() => update({w:Math.min(80,sel.w+MODULE)})}/></div><div><label>BASE WIDTH</label><Stepper ftValue={sel.d} onDec={() => update({d:Math.max(0.5,sel.d-0.25)})} onInc={() => update({d:Math.min(4,sel.d+0.25)})}/></div><div><label>BATTER INSET</label><Stepper ftValue={sel.batter ?? 0} onDec={() => update({batter:Math.max(0,(sel.batter ?? 0)-0.1)})} onInc={() => update({batter:Math.min(wallBatterLimit(sel),(sel.batter ?? 0)+0.1)})}/></div></> : <><div><label>WIDTH</label><Stepper ftValue={sel.w} onDec={() => update({w:Math.max(8,sel.w-MODULE)})} onInc={() => update({w:Math.min(32,sel.w+MODULE)})}/></div><div><label>DEPTH</label><Stepper ftValue={sel.d} onDec={() => update({d:Math.max(8,sel.d-MODULE)})} onInc={() => update({d:Math.min(32,sel.d+MODULE)})}/></div></>}
+                  <div><label>HEIGHT</label><Stepper ftValue={sel.h} onDec={() => update({h:Math.max(sel.shape === "wall" ? 6 : 8,sel.h-1)})} onInc={() => update({h:Math.min(sel.shape === "wall" ? 20 : 14,sel.h+1)})}/></div>
+                  {sel.shape === "wall" && <div><label>TOP WIDTH</label><span>{formatFeet(wallTopWidth(sel), units)}</span></div>}
                 </div>
               </section>
-              <section className="builder-section"><div className="section-number">03</div><h2>ROOFS</h2><p>Add a roof to this volume.</p><div className="segmented thirds"><button className={(sel.roof ?? 'none') === 'none' ? 'active':''} onClick={() => update({roof:'none'})}>NONE</button><button className={sel.roof === 'flat' ? 'active':''} onClick={() => update({roof:'flat'})}>FLAT</button>{sel.shape !== 'cylinder' && <button className={sel.roof === 'pitched' ? 'active':''} onClick={() => update({roof:'pitched'})}>MONO</button>}</div></section>
-              <section className="builder-section"><div className="section-number">04</div><h2>POSITION</h2><p>Orient the selected volume.</p><div className="dimension-list"><div><label>ROTATION</label><div className="rotation-control"><button onClick={() => update({rot:(sel.rot+315)%360})}>−</button><span>{sel.rot}°</span><button onClick={() => update({rot:(sel.rot+45)%360})}>＋</button></div></div></div><button className="remove-action" onClick={removeSelected}>REMOVE VOLUME</button></section>
+              {sel.shape !== "wall" && <section className="builder-section"><div className="section-number">03</div><h2>ROOFS</h2><p>Add a roof to this volume.</p><div className="segmented thirds"><button className={(sel.roof ?? 'none') === 'none' ? 'active':''} onClick={() => update({roof:'none'})}>NONE</button><button className={sel.roof === 'flat' ? 'active':''} onClick={() => update({roof:'flat'})}>FLAT</button>{sel.shape !== 'cylinder' && <button className={sel.roof === 'pitched' ? 'active':''} onClick={() => update({roof:'pitched'})}>MONO</button>}</div></section>}
+              <section className="builder-section"><div className="section-number">04</div><h2>POSITION</h2><p>Orient the selected {sel.shape === "wall" ? "wall" : "volume"}.</p><div className="dimension-list"><div><label>ROTATION</label><div className="rotation-control"><button onClick={() => update({rot:(sel.rot+360-(sel.shape === "wall" ? 15 : 45))%360})}>−</button><span>{sel.rot}°</span><button onClick={() => update({rot:(sel.rot+(sel.shape === "wall" ? 15 : 45))%360})}>＋</button></div></div></div><button className="remove-action" onClick={removeSelected}>REMOVE {sel.shape === "wall" ? "WALL" : "VOLUME"}</button></section>
             </>}
             {selectedIds.length > 1 && <section className="builder-section"><div className="section-number">02</div><h2>GROUP</h2><p>Drag any selected volume to move the group while preserving its layout.</p><button className="outline-action" onClick={rotateSelected}>ROTATE EACH 45°</button><button className="remove-action" onClick={removeSelected}>REMOVE {selectedIds.length} VOLUMES</button></section>}
-            <button className="add-volume-footer" onClick={sel?.shape === 'cylinder' ? addCylinder : addVolume}>＋ ADD VOLUME</button>
+            <button className="add-volume-footer" onClick={sel?.shape === 'cylinder' ? addCylinder : sel?.shape === 'wall' ? addWall : addVolume}>＋ ADD {sel?.shape === "wall" ? "WALL" : "VOLUME"}</button>
           </>}
 
           {menuMode === "open" && <>{!sel && <div className="empty-state"><span>SELECT A VOLUME</span><h2>OPENINGS BEGIN<br/>WITH A WALL.</h2><p>Choose a volume in the model to add doors and windows.</p></div>}{sel && <>
-            {[['01','DOORS','door'],['02','WINDOWS','window']].map(([num,title,type]) => <section className="builder-section" key={type}><div className="section-number">{num}</div><h2>{title}</h2><p>Add a {type} to a wall.</p>{sel.shape === 'cylinder' ? <button className="primary full" onClick={() => addOpening(null,type)}>＋ ADD {type.toUpperCase()}</button> : <><div className="field-label">SELECT WALL</div><div className="wall-grid">{Object.entries(wallNames).map(([wall,name]) => <button key={wall} onClick={() => addOpening(wall,type)}>{name}<small>＋ {type.toUpperCase()}</small></button>)}</div></>}</section>)}
-            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">03</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button title="Move left" onClick={() => nudgeOpening(o.id,-1)}>←</button><button title="Move right" onClick={() => nudgeOpening(o.id,1)}>→</button>{o.type === 'window' && <><button title="Raise sill" onClick={() => nudgeSill(o.id,1)}>↑</button><button title="Lower sill" onClick={() => nudgeSill(o.id,-1)}>↓</button></>}<button title="Narrower" onClick={() => nudgeWidth(o.id,-1)}>w−</button><button title="Wider" onClick={() => nudgeWidth(o.id,1)}>w+</button><button title="Shorter" onClick={() => nudgeHeight(o.id,-1)}>h−</button><button title="Taller" onClick={() => nudgeHeight(o.id,1)}>h+</button><button title="Remove" onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
+            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">01</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:sel.shape==='wall'?'THROUGH WALL':`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button title="Move left" onClick={() => nudgeOpening(o.id,-1)}>←</button><button title="Move right" onClick={() => nudgeOpening(o.id,1)}>→</button>{o.type === 'window' && <><button title="Raise sill" onClick={() => nudgeSill(o.id,1)}>↑</button><button title="Lower sill" onClick={() => nudgeSill(o.id,-1)}>↓</button></>}<button title="Narrower" onClick={() => nudgeWidth(o.id,-1)}>w−</button><button title="Wider" onClick={() => nudgeWidth(o.id,1)}>w+</button><button title="Shorter" onClick={() => nudgeHeight(o.id,-1)}>h−</button><button title="Taller" onClick={() => nudgeHeight(o.id,1)}>h+</button><button title="Remove" onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
+            {[[sel.openings.length ? '02' : '01','DOORS','door'],[sel.openings.length ? '03' : '02','WINDOWS','window']].map(([num,title,type]) => <section className="builder-section" key={type}><div className="section-number">{num}</div><h2>{title}</h2><p>Add a {type} to a wall.</p>{sel.shape === 'cylinder' ? <button className="primary full" onClick={() => addOpening(null,type)}>＋ ADD {type.toUpperCase()}</button> : sel.shape === 'wall' ? <button className="primary full" onClick={() => addOpening('front',type)}>＋ ADD THROUGH {type.toUpperCase()}</button> : <><div className="field-label">SELECT WALL</div><div className="wall-grid">{Object.entries(wallNames).map(([wall,name]) => <button key={wall} onClick={() => addOpening(wall,type)}>{name}<small>＋ {type.toUpperCase()}</small></button>)}</div></>}</section>)}
           </>}</>}
 
           {menuMode === "count" && <div className="count-mode"><div className="count-kicker">COUNT</div><h2>YOUR BUILD</h2><div className="big-stat"><strong>{String(volumes.length).padStart(2,'0')}</strong><span>VOLUMES</span></div><div className="big-stat"><strong>{fmt(takeoff.grand.extNetArea + takeoff.grand.intNetArea)}</strong><span>FT² FORMED</span></div><section className="count-ledger"><h3>MATERIAL TAKEOFF</h3><DataRow k="WALL VOLUME" v={`${fmt(takeoff.grand.netVolCuyd,1)} YD³`}/><DataRow k="CEMENT" v={`${Math.ceil(takeoff.grand.cementBags)} BAGS`}/>{takeoff.soilCuyd>0&&<DataRow k="EARTH" v={`${fmt(takeoff.soilCuyd,1)} YD³`}/>} {takeoff.lavaSandCuyd>0&&<DataRow k="LAVASAND" v={`${fmt(takeoff.lavaSandCuyd,1)} YD³`}/>}<DataRow k="WALL WEIGHT" v={`${fmt(takeoff.grand.weightTons,1)} TONS`}/><DataRow k="FLOOR AREA" v={formatArea(takeoff.grand.floorArea,units)}/></section><button className="export-action" onClick={downloadTakeoff}>↓ EXPORT MATERIAL TAKEOFF</button></div>}
@@ -2198,6 +2322,7 @@ export default function ShelterVolumeStudy() {
         <div style={{ ...row, marginTop: 6 }}>
           <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addVolume}>+ CUBIFORM</button>
           <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addCylinder}>+ CYLINDER</button>
+          <button style={{ ...btnActive, flex: 1, padding: "8px 0" }} onClick={addWall}>+ WALL</button>
         </div>
 
         <div style={{ ...row, marginTop: 6 }}>
@@ -2249,15 +2374,30 @@ export default function ShelterVolumeStudy() {
               <button style={sel.material === "lava" ? btnActive : btn} onClick={() => update({ material: "lava" })}>lavacrete</button>
             </div>
 
-            <div style={label}>Wall</div>
+            {sel.shape !== "wall" && <><div style={label}>Wall</div>
             <div style={row}>
               <button style={sel.t === 1 ? btnActive : btn} onClick={() => update({ t: 1 })}>12&#8243;</button>
               <button style={sel.t === 1.5 ? btnActive : btn} onClick={() => update({ t: 1.5 })}>18&#8243;</button>
               <button style={sel.t === 2 ? btnActive : btn} onClick={() => update({ t: 2 })}>24&#8243;</button>
-            </div>
+            </div></>}
+
+            {sel.shape === "wall" && <>
+              <div style={label}>Batter profile</div>
+              <div style={row}>
+                {[["both", "both slope"], ["front-flat", "front flat"], ["back-flat", "back flat"]].map(([mode, name]) =>
+                  <button key={mode} style={{ ...(wallBatterMode(sel) === mode ? btnActive : btn), flex: 1 }} onClick={() => update({ batterMode: mode })}>{name}</button>)}
+              </div>
+            </>}
 
             <div style={label}>Footprint</div>
-            {sel.shape === "cylinder" ? (
+            {sel.shape === "wall" ? (
+              <>
+                <div style={row}><span style={{ color: WHITE_DIM }}>length</span><Stepper ftValue={sel.w} onDec={() => update({ w: Math.max(6, sel.w - MODULE) })} onInc={() => update({ w: Math.min(80, sel.w + MODULE) })} /></div>
+                <div style={row}><span style={{ color: WHITE_DIM }}>base width</span><Stepper ftValue={sel.d} onDec={() => update({ d: Math.max(0.5, sel.d - 0.25) })} onInc={() => update({ d: Math.min(4, sel.d + 0.25) })} /></div>
+                <div style={row}><span style={{ color: WHITE_DIM }}>batter inset</span><Stepper ftValue={sel.batter ?? 0} onDec={() => update({ batter: Math.max(0, (sel.batter ?? 0) - 0.1) })} onInc={() => update({ batter: Math.min(wallBatterLimit(sel), (sel.batter ?? 0) + 0.1) })} /></div>
+                <div style={row}><span style={{ color: WHITE_DIM }}>top width</span><span>{formatFeet(wallTopWidth(sel), units)}</span></div>
+              </>
+            ) : sel.shape === "cylinder" ? (
               <div style={row}>
                 <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, width: 12, color: WHITE_DIM }}>R</span>
                 <Stepper ftValue={sel.r} onDec={() => update({ r: Math.max(4, sel.r - MODULE) })} onInc={() => update({ r: Math.min(20, sel.r + MODULE) })} />
@@ -2276,30 +2416,32 @@ export default function ShelterVolumeStudy() {
             )}
 
             <div style={label}>Height</div>
-            <Stepper ftValue={sel.h} onDec={() => update({ h: Math.max(8, sel.h - 1) })} onInc={() => update({ h: Math.min(14, sel.h + 1) })} />
+            <Stepper ftValue={sel.h} onDec={() => update({ h: Math.max(sel.shape === "wall" ? 6 : 8, sel.h - 1) })} onInc={() => update({ h: Math.min(sel.shape === "wall" ? 20 : 14, sel.h + 1) })} />
 
             <div style={label}>Orientation</div>
             <div style={row}>
-              <button style={btn} onClick={() => update({ rot: (sel.rot + 45) % 360 })}>rotate 45&#176;</button>
+              <button style={btn} onClick={() => update({ rot: (sel.rot + (sel.shape === "wall" ? 15 : 45)) % 360 })}>rotate {sel.shape === "wall" ? 15 : 45}&#176;</button>
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: WHITE }}>{sel.rot}&#176;</span>
             </div>
 
-            <div style={label}>Roof</div>
+            {sel.shape !== "wall" && <><div style={label}>Roof</div>
             <div style={row}>
               <button style={(sel.roof ?? "none") === "none" ? btnActive : btn} onClick={() => update({ roof: "none" })}>none</button>
               <button style={sel.roof === "flat" ? btnActive : btn} onClick={() => update({ roof: "flat" })}>flat</button>
               {sel.shape !== "cylinder" && (
                 <button style={sel.roof === "pitched" ? btnActive : btn} onClick={() => update({ roof: "pitched" })}>3:12 mono-slope</button>
               )}
-            </div>
-            {sel.roof === "pitched" && sel.shape !== "cylinder" && (
+            </div></>}
+            {sel.roof === "pitched" && sel.shape === "cubiform" && (
               <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, color: WHITE_DIM, marginTop: 4, lineHeight: 1.4 }}>
                 high side faces the volume&#8217;s front &#8212; use Orientation above to point it elsewhere
               </div>
             )}
 
             <div style={label}>Openings &#183; snap {MODULE}&#8242;</div>
-            {sel.shape === "cylinder" ? (
+            {sel.shape === "wall" ? (
+              <div style={{ ...row, marginBottom: 3 }}><button style={btn} onClick={() => addOpening("front", "door")}>+ through door</button><button style={btn} onClick={() => addOpening("front", "window")}>+ through window</button></div>
+            ) : sel.shape === "cylinder" ? (
               <div style={{ ...row, marginBottom: 3 }}>
                 <button style={btn} onClick={() => addOpening(null, "door")}>+door</button>
                 <button style={btn} onClick={() => addOpening(null, "window")}>+win</button>
@@ -2319,6 +2461,7 @@ export default function ShelterVolumeStudy() {
                 <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: WHITE }}>
                   {sel.shape === "cylinder"
                     ? `${o.type} @ ${Math.round((o.angle * 180) / Math.PI)}°`
+                    : sel.shape === "wall" ? `through ${o.type} @ ${o.pos >= 0 ? "+" : ""}${o.pos}′`
                     : `${wallNames[o.wall]} ${o.type} @ ${o.pos >= 0 ? "+" : ""}${o.pos}′`}
                 </div>
                 <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: WHITE_DIM, marginBottom: 3 }}>
