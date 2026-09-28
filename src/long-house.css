@@ -1,0 +1,28 @@
+.long-house-panel summary { cursor:pointer; font-size:11px; padding:10px 0; }
+.lh-field { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--rule); font-size:10px; }
+.lh-field input,.lh-field select { min-width:0; width:135px; padding:8px; background:transparent; border:1px solid var(--rule); color:var(--ink); font:inherit; }
+.lh-field input[type=number] { width:72px; }
+.lh-places { display:grid; gap:7px; margin-top:12px; }
+.lh-places button,.lh-row button { text-align:left; background:transparent; border:1px solid var(--rule); padding:13px; cursor:pointer; }
+.lh-places strong,.lh-row strong { display:block; font:600 17px Helvetica,Arial,sans-serif; }
+.lh-places span,.lh-row span,.lh-row small { display:block; font-size:9px; line-height:1.6; margin-top:5px; }
+.lh-row { display:grid; gap:5px; margin:0 0 16px; border-left:1px dashed var(--oxide); padding-left:12px; }
+.lh-row button { background:#ded3c0; }
+.lh-row button.sky { background:#eef0e7; border-style:dashed; }
+.lh-row button.selected { outline:2px solid var(--oxide); outline-offset:-2px; }
+.lh-order { display:flex; gap:8px; margin-top:16px; }
+.lh-order button,.lh-confirm button { flex:1; padding:10px 5px; border:1px solid var(--rule); background:transparent; font:inherit; font-size:9px; cursor:pointer; }
+.lh-order button:disabled { opacity:.3; cursor:default; }
+.lh-check { display:flex; align-items:center; gap:10px; margin-top:16px; font-size:11px; }
+.lh-guidance { padding:16px 0; color:var(--oxide); font-size:10px; line-height:1.7; }
+.lh-guidance h3 { font-size:10px; }
+.lh-footnote { font-size:10px; line-height:1.7; margin:20px 0; }
+.lh-confirm { padding:12px; border:1px solid var(--oxide); margin-top:12px; }
+.lh-confirm p { margin:0 0 12px; }
+.pattern-link { color:inherit; text-decoration:none; font-size:10px; padding:12px 8px; display:block; border-bottom:1px solid var(--rule); }
+
+.lh-field input,.lh-field select { max-width:55%; }
+@media(max-width:700px) { .long-house-panel h2 { font-size:24px; } .long-house-panel .section-number { min-width:24px; } .long-house-panel .builder-section p { margin-left:0; } }
+.lh-row-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px; }
+.lh-row-tabs button { padding:9px; font:inherit; font-size:10px; background:transparent; border:1px solid var(--rule); cursor:pointer; }
+.lh-row-tabs button[aria-pressed=true] { background:var(--ink); color:var(--paper); }

@@ -1,5 +1,13 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import * as THREE from "three";
+import LongHousePanel from './LongHousePanel.jsx';
+import { DEFAULT_SITE, isCourt, makeRowItem, startingRow, openingRelationship, layoutSite, resizeSite, rowWidth, siteRowCount, rowCenter, roomLevels, roomInnerFootprint, sideCourtSections, courtNetworks, siteWallVolumes, sitePlanSVG, siteGroundHeight } from './longHouse.js';
+import { pickVolumeHit } from './volumePicking.js';
+import { normalizeProjectIds } from './projectIds.js';
+import { deckParapetBoxes, terraceParapetBoxes } from './parapetGeometry.js';
+import { longHouseZoom } from './cameraNavigation.js';
+const launch = new URLSearchParams(window.location.search);
+const LONG_HOUSE = launch.get('mode') === 'long-house';
 import lavacreteTextureUrl from "./assets/lavacrete-texture.jpg";
 import csreTextureUrl from "./assets/csre-texture.jpg";
 
@@ -43,7 +51,6 @@ const wallTopWidth = (v) => {
   const { front, back } = wallBatterInsets(v);
   return Math.round(Math.max(0, v.d - front - back) * 100) / 100;
 };
-const FT = 1;            // world units are feet
 const SANDBOX = 50;       // ft — half-extent of the buildable plot from center
 const clampCoord = (v) => Math.min(SANDBOX, Math.max(-SANDBOX, v));
 
@@ -92,7 +99,6 @@ const COURTYARD_MIN = 4, COURTYARD_MAX = 12; // ft — facing gap range that sna
 const INK = "#262119";
 const PAPER = "#efebe2";
 const OXIDE = "#8a4b2d";
-const SAGE = "#7c8471";
 const ROOF_COLOR = 0x9b968a; // placeholder roof tone, distinct from wall materials
 
 let _id = 1;
@@ -101,7 +107,7 @@ const nid = () => _id++;
 /* ---------------- save / load ---------------- */
 
 const PROJECT_VERSION = 1;
-const AUTOSAVE_KEY = "shelter-on-the-land:autosave:v1";
+const AUTOSAVE_KEY = LONG_HOUSE ? "shelter-on-the-land:long-house:v1" : "shelter-on-the-land:autosave:v1";
 
 // Restored/imported volumes carry their own ids (and their openings'
 // ids), assigned by whatever session saved them. Advance the counter
@@ -118,8 +124,8 @@ function bumpIdCounter(volumes) {
   if (max >= _id) _id = max + 1;
 }
 
-function serializeProject(volumes, units, showRoofs) {
-  return { version: PROJECT_VERSION, savedAt: new Date().toISOString(), units, showRoofs, volumes };
+function serializeProject(volumes, units, showRoofs, site) {
+  return { pattern: LONG_HOUSE ? "long-house" : "four-walls", site, version: PROJECT_VERSION, savedAt: new Date().toISOString(), units, showRoofs, volumes };
 }
 
 // Returns an error string if `obj` isn't a project this app can safely
@@ -133,6 +139,13 @@ function validateProject(obj) {
     return obj.version > PROJECT_VERSION
       ? `saved by a newer version of the app (version ${obj.version}) — can't load it here`
       : `unrecognized project file version (${obj.version ?? "none"})`;
+  }
+  if (obj.pattern && !['four-walls', 'long-house'].includes(obj.pattern)) return "unsupported pattern";
+  if (obj.pattern === 'long-house') {
+    if (!obj.site || !Number.isFinite(obj.site.width) || !Number.isFinite(obj.site.depth) || obj.site.width < 8 || obj.site.width > 400 || obj.site.depth < 16 || obj.site.depth > 300 || !['South','West','North','East'].includes(obj.site.front)) return "invalid Long House site";
+    if (!Number.isInteger(obj.site.rows ?? 1) || (obj.site.rows ?? 1) < 1 || (obj.site.rows ?? 1) > 12 || rowWidth(obj.site) < 8) return "invalid Long House row count";
+    if ((obj.site.groundHeight != null && (!Number.isFinite(obj.site.groundHeight) || obj.site.groundHeight < 8 || obj.site.groundHeight > 20)) || (obj.site.upperHeight != null && (!Number.isFinite(obj.site.upperHeight) || obj.site.upperHeight < 7 || obj.site.upperHeight > 15))) return "invalid Long House wall height";
+    if (!Array.isArray(obj.volumes) || obj.volumes.some(v => !v || v.shape !== 'cubiform' || !['room','court'].includes(v.kind) || typeof v.label !== 'string' || !['separate','shared'].includes(v.join) || ![1,2].includes(v.stories) || ![v.w,v.d,v.h,v.t,v.x,v.z].every(Number.isFinite) || !Number.isInteger(v.row ?? 0) || (v.row ?? 0) < 0 || (v.row ?? 0) >= siteRowCount(obj.site) || v.w < 8 || v.d < 2 || v.d > 80 || v.h <= 0 || v.t <= 0 || (v.side != null && !['left','right'].includes(v.side)) || (v.upperSide != null && !['left','right'].includes(v.upperSide)) || (v.upperEnd != null && !['back','front'].includes(v.upperEnd)) || (v.upperWidth != null && (!Number.isFinite(v.upperWidth) || v.upperWidth < 8 || v.upperWidth > v.w)) || (v.upperDepth != null && (!Number.isFinite(v.upperDepth) || v.upperDepth < 8 || v.upperDepth > v.d)) || !Array.isArray(v.openings) || v.openings.some(o => !o || !['front','back','left','right'].includes(o.wall) || !['door','window'].includes(o.type) || !Number.isFinite(o.pos)))) return "invalid Long House sequence";
   }
   if (!Array.isArray(obj.volumes)) return "missing volumes";
   for (const v of obj.volumes) {
@@ -171,7 +184,10 @@ function loadAutosave() {
     if (!raw) return null;
     const obj = JSON.parse(raw);
     if (validateProject(obj)) return null;
+    if ((obj.pattern === 'long-house') !== LONG_HOUSE) return null;
+    obj.volumes = normalizeProjectIds(obj.volumes);
     bumpIdCounter(obj.volumes);
+    if (LONG_HOUSE) obj.volumes = layoutSite(obj.volumes, obj.site);
     return obj;
   } catch {
     return null;
@@ -376,12 +392,57 @@ function buildRoofGroup(vol) {
 }
 
 
-function buildVolumeGroup(vol, baseTex) {
+function parapetMaterial(vol, baseTex, run, height, yBottom) {
+  const map = baseTex[vol.material].clone();
+  const span = WALL_TEX_V_SPAN[vol.material];
+  map.needsUpdate = true;
+  map.repeat.set(run / 4, height / span);
+  map.offset.set(0, (yBottom / span) % 1);
+  return new THREE.MeshStandardMaterial({ map, roughness: 0.95, metalness: 0 });
+}
+
+function buildVolumeGroup(vol, baseTex, site) {
   const group = new THREE.Group();
   group.rotation.y = THREE.MathUtils.degToRad(vol.rot);
-  group.position.set(vol.x, 0, vol.z);
+  group.position.set(vol.x, vol.baseY ?? 0, vol.z);
   group.userData.volumeId = vol.id;
 
+  if (site && vol.stories === 2 && !isCourt(vol)) {
+    const [lower, upper] = roomLevels(vol, site);
+    const groundHeight = siteGroundHeight(site);
+    group.add(buildVolumeGroup({ ...lower, x: 0, z: 0 }, baseTex));
+    group.add(buildVolumeGroup({ ...upper, x: upper.x - vol.x, z: upper.z - vol.z, baseY: groundHeight }, baseTex));
+    const terrace = upper.w < vol.w - .01 || upper.d < vol.d - .01;
+    if (terrace) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(vol.w, .3, vol.d), new THREE.MeshStandardMaterial({ color: 0xb9aa90, roughness: 1 }));
+      slab.position.y = groundHeight;
+      slab.userData.volumeId = vol.id;
+      group.add(slab);
+      for (const box of terraceParapetBoxes(vol, upper)) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(box.w, 2, box.d), parapetMaterial(vol, baseTex, Math.max(box.w, box.d), 2, groundHeight));
+        rail.position.set(box.x, groundHeight + 1, box.z);
+        rail.userData.volumeId = vol.id;
+        group.add(rail);
+      }
+    }
+    return group;
+  }
+
+  if (isCourt(vol)) {
+    const ground = new THREE.Mesh(new THREE.BoxGeometry(vol.w, 0.08, vol.d), new THREE.MeshStandardMaterial({ color: vol.future ? 0xc3c1a4 : 0xa4ab8e, roughness: 1 }));
+    ground.position.y = 0.08; ground.receiveShadow = true; ground.userData.volumeId = vol.id; group.add(ground);
+    return group;
+  }
+  if (vol.stories === 2) {
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(vol.w - 2 * vol.t, 0.3, vol.d - 2 * vol.t), new THREE.MeshStandardMaterial({ color: ROOF_COLOR }));
+    floor.position.y = 9; floor.userData.volumeId = vol.id; group.add(floor);
+  }
+  if (vol.deck) {
+    for (const box of deckParapetBoxes(vol)) {
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(box.w, 3, box.d), parapetMaterial(vol, baseTex, Math.max(box.w, box.d), 3, vol.h));
+      edge.position.set(box.x, vol.h + 1.5, box.z); edge.userData.volumeId = vol.id; edge.userData.isRoof = true; group.add(edge);
+    }
+  }
   const { h, t } = vol;
   const tex = baseTex[vol.material];
 
@@ -461,11 +522,20 @@ function buildVolumeGroup(vol, baseTex) {
 
   for (const wall of walls) {
     const ops = vol.openings.filter((o) => o.wall === wall.key);
-    const boxes = wallBoxes(wall.L, h, t, ops);
+    const onSiteWall = (wall.key === 'left' && (vol.siteLeft ?? vol.siteSides)) || (wall.key === 'right' && (vol.siteRight ?? vol.siteSides)) || (wall.key === 'back' && vol.siteBack) || (wall.key === 'front' && vol.siteFront);
+    if (onSiteWall) continue;
+    const sharedHeight = wall.key === 'back' ? (vol.sharedBack || 0) : 0;
     const wg = new THREE.Group();
     wg.rotation.y = wall.rotY;
     wg.position.set(wall.px, 0, wall.pz);
-    for (const b of boxes) wg.add(mkMesh(b));
+    if (vol.stories === 2) {
+      for (const level of [0, 1]) {
+        if (sharedHeight >= (level + 1) * 9) continue;
+        for (const box of wallBoxes(wall.L, 9, t, ops.filter(o => (o.level || 0) === level))) wg.add(mkMesh(box, level * 9));
+      }
+    } else if (sharedHeight < h) {
+      for (const box of wallBoxes(wall.L, h, t, ops)) wg.add(mkMesh(box));
+    }
     group.add(wg);
   }
 
@@ -530,16 +600,18 @@ function buildVolumeGroup(vol, baseTex) {
   }
 
   // interior slab, 4" proud
-  const slabGeo = new THREE.BoxGeometry(w - 2 * t, 0.33, d - 2 * t);
+  const inner = LONG_HOUSE ? roomInnerFootprint(vol) : { w: w - 2 * t, d: d - 2 * t, x: 0, z: 0 };
+  const slabGeo = new THREE.BoxGeometry(inner.w, 0.33, inner.d);
   const slabMat = new THREE.MeshStandardMaterial({ color: 0x9b9186, roughness: 1 });
   const slab = new THREE.Mesh(slabGeo, slabMat);
-  slab.position.y = 0.165;
+  slab.position.set(inner.x, 0.165, inner.z);
   slab.receiveShadow = true;
   slab.userData.volumeId = vol.id;
   group.add(slab);
 
   const roof = buildRoofGroup(vol);
   if (roof) group.add(roof);
+  if (vol.future) group.traverse(o => { if (o.isMesh) { o.material.transparent = true; o.material.opacity = 0.3; o.castShadow = false; } });
 
   return group;
 }
@@ -719,9 +791,15 @@ function volumeTakeoff(vol, settings) {
   const topInset = insets ? insets.front + insets.back : 0;
   const grossVol = vol.shape === "wall" ? vol.w * h * (vol.d - topInset / 2) : wallFootprintArea(vol) * h;
   const perims = wallPerimeters(vol);
+  const omittedWalls = new Set(vol.omitWallKeys ?? []);
+  const cubiformWallLength = key => key === 'front' || key === 'back' ? vol.w : vol.d - 2 * t;
+  const omittedMeasure = key => Math.max(omittedWalls.has(key) ? h : 0, key === 'back' && vol.sharedBack ? Math.min(h,vol.sharedBack) : 0);
+  const omittedVolume = vol.shape === 'cubiform' ? [...new Set([...omittedWalls,'back'])].reduce((sum,key)=>sum+cubiformWallLength(key)*t*omittedMeasure(key),0) : 0;
+  const omittedArea = vol.shape === 'cubiform' ? [...new Set([...omittedWalls,'back'])].reduce((sum,key)=>sum+cubiformWallLength(key)*omittedMeasure(key),0) : 0;
 
   let openingVol = 0, openingArea = 0;
   for (const o of vol.openings) {
+    if (omittedMeasure(o.wall) >= h || (o.wall === 'back' && (o.level ?? 0) * 9 < omittedMeasure('back'))) continue;
     const ow = openingWidth(o), oh = openingHeight(o);
     const sill = o.type === "window" ? o.sill ?? SILL : 0;
     const thickness = vol.shape === "wall"
@@ -731,7 +809,7 @@ function volumeTakeoff(vol, settings) {
     openingArea += ow * oh;
   }
 
-  const netVolCuft = Math.max(0, grossVol - openingVol);
+  const netVolCuft = Math.max(0, grossVol - omittedVolume - openingVol);
   const netVolCuyd = netVolCuft / CUFT_PER_CUYD;
 
   const isEarth = material === "earth";
@@ -749,11 +827,13 @@ function volumeTakeoff(vol, settings) {
   const extNetArea = vol.shape === "wall"
     ? Math.max(0, vol.w * (Math.hypot(h, insets.front) + Math.hypot(h, insets.back)) +
       2 * h * (vol.d - topInset / 2) - 2 * openingArea)
-    : Math.max(0, perims.ext * h - openingArea);
-  const intNetArea = vol.shape === "wall" ? 0 : Math.max(0, perims.int * h - openingArea);
+    : Math.max(0, perims.ext * h - omittedArea - openingArea);
+  const intNetArea = vol.shape === "wall" ? 0 : Math.max(0, perims.int * h - omittedArea - openingArea);
   const floorArea = vol.shape === "wall" ? 0 : vol.shape === "cylinder"
     ? Math.PI * (vol.r - t) * (vol.r - t)
-    : (vol.w - 2 * t) * (vol.d - 2 * t);
+    : LONG_HOUSE && vol.kind === 'room'
+      ? roomInnerFootprint(vol).w * roomInnerFootprint(vol).d
+      : (vol.w - 2 * t) * (vol.d - 2 * t);
 
   return {
     id: vol.id, material, aggLabel: isEarth ? "soil" : "lavasand",
@@ -841,6 +921,7 @@ function formatArea(sqft, units) {
 // unicode (not &#...; entities) so this drops straight into JSX text as
 // well as the SVG markup string.
 function volumeDesc(v, units) {
+  if (isCourt(v)) return `OPEN SKY · ${formatLength(v.w, units)} × ${formatLength(v.d, units)}`;
   return v.shape === "wall"
     ? `STRAIGHT WALL ${formatFeet(v.w, units)} × ${formatFeet(v.d, units)} · H ${formatFeet(v.h, units)} · BATTER ${formatFeet(v.batter ?? 0, units)} ${wallBatterMode(v) === "both" ? "BOTH FACES" : wallBatterMode(v) === "front-flat" ? "FRONT FLAT" : "BACK FLAT"}`
     : v.shape === "cylinder"
@@ -915,7 +996,7 @@ function hasCloseNeighbor(volumes, v, dirAxis, dirSign) {
 // their footprints into a shared string would need cross-rotation edge
 // math this pass doesn't attempt.
 function buildDimChains(volumes, axis) {
-  const eligible = volumes.filter((v) => v.shape === "cubiform" && v.rot === 0);
+  const eligible = volumes.filter((v) => !isCourt(v) && v.shape === "cubiform" && v.rot === 0);
   const sorted = [...eligible].sort((a, b) => (axis === "x" ? a.x - b.x : a.z - b.z));
   const chains = [];
   let current = [];
@@ -938,7 +1019,8 @@ function buildDimChains(volumes, axis) {
 
 /* ---------------- plan SVG (drawn from data) ---------------- */
 
-function planSVG(volumes, units = "imperial") {
+function planSVG(volumes, units = "imperial", site = DEFAULT_SITE) {
+  if (LONG_HOUSE) return sitePlanSVG(volumes, site, units);
   if (!volumes.length) return { markup: "<svg></svg>", w: 400, h: 300 };
   const S = 9; // px per ft — bumped up from 7 so clustered multi-volume plans read clearly
   const PAD = 14; // ft margin
@@ -1113,6 +1195,12 @@ function planSVG(volumes, units = "imperial") {
   for (const v of volumes) {
     s += `<g transform="translate(${px(v.x - minX)} ${px(v.z - minY)}) rotate(${-v.rot})">`;
 
+    if (isCourt(v)) {
+      s += `<rect x="${-px(v.w / 2)}" y="${-px(v.d / 2)}" width="${px(v.w)}" height="${px(v.d)}" fill="#d9dfce" stroke="${INK}" stroke-dasharray="4 4"/>`;
+      s += `<text x="${px(v.w / 2 + 4)}" y="-6" font-family="monospace" font-size="10">${volumes.indexOf(v) + 1}. OPEN SKY</text>`;
+      s += `<text x="${px(v.w / 2 + 4)}" y="10" font-family="monospace" font-size="10">${formatLength(v.d, units)}</text></g>`;
+      continue;
+    }
     if (v.shape === "wall") {
       // A freestanding wall is a solid strip, with a through-opening cut
       // across its full base width. The dashed inner lines mark the top
@@ -1150,10 +1238,10 @@ function planSVG(volumes, units = "imperial") {
       // poché ring
       s += `<path fill="${INK}" fill-rule="evenodd" d="
         M ${-px(v.w / 2)} ${-px(v.d / 2)} h ${px(v.w)} v ${px(v.d)} h ${-px(v.w)} Z
-        M ${-px(v.w / 2 - v.t)} ${-px(v.d / 2 - v.t)} h ${px(v.w - 2 * v.t)} v ${px(v.d - 2 * v.t)} h ${-px(v.w - 2 * v.t)} Z"/>`;
+        M ${-px(v.w / 2 - v.t)} ${-px(v.d / 2 - (v.sharedBack ? 0 : v.t))} h ${px(v.w - 2 * v.t)} v ${px(v.d - (v.sharedBack ? v.t : 2 * v.t))} h ${-px(v.w - 2 * v.t)} Z"/>`;
       // openings per wall, drawn in wall-local coords (x along wall, +y outward)
       for (const key of ["front", "back", "right", "left"]) {
-        const ops = v.openings.filter((o) => o.wall === key);
+        const ops = v.openings.filter((o) => o.wall === key && o.level !== 1 && !(key === "back" && v.sharedBack));
         if (!ops.length) continue;
         s += `<g transform="${wallXf(v, key)}">`;
         for (const o of ops) {
@@ -1228,12 +1316,12 @@ function planSVG(volumes, units = "imperial") {
   });
 
   // north arrow + titleblock line
-  s += `<g transform="translate(${W - 34} 40)">
+  s += `<g transform="translate(${W - 34} 40) rotate(${LONG_HOUSE ? {North:0,East:-90,South:180,West:90}[site.front] : 0})">
     <line x1="0" y1="14" x2="0" y2="-14" stroke="${INK}" stroke-width="1.4"/>
     <path d="M 0 -14 L -5 -4 L 5 -4 Z" fill="${INK}"/>
     <text x="0" y="30" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="${INK}">N</text>
   </g>`;
-  s += `<text x="12" y="${H - 12}" font-family="ui-monospace,monospace" font-size="11" fill="${INK}">SHELTER ON THE LAND &#183; VOLUME STUDY &#183; PLAN &#183; grid = 2&#8242; module &#183; not for construction</text>`;
+  s += `<text x="12" y="${H - 12}" font-family="ui-monospace,monospace" font-size="11" fill="${INK}">SHELTER ON THE LAND &#183; ${LONG_HOUSE ? "LONG HOUSE" : "VOLUME STUDY"} &#183; PLAN &#183; grid = 2&#8242; module &#183; not for construction</text>`;
 
   const markup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="background:${PAPER}">${s}</svg>`;
   return { markup, w: W, h: H };
@@ -1247,8 +1335,18 @@ export default function ShelterVolumeStudy() {
   // Read once, at init — if a browser autosave exists, it seeds the
   // scene directly rather than flashing the default seed first and
   // swapping it in a later effect.
-  const [initialProject] = useState(() => loadAutosave());
-  const [volumes, setVolumes] = useState(() => initialProject?.volumes ?? [
+  const [initialProject] = useState(() => {
+    if (LONG_HOUSE && launch.has('preset')) return { volumes: layoutSite(startingRow(launch.get('preset'), DEFAULT_SITE, nid), DEFAULT_SITE), site: DEFAULT_SITE };
+    return loadAutosave();
+  });
+  useEffect(() => {
+    if (LONG_HOUSE && launch.has('preset')) {
+      const url = new URL(window.location.href); url.searchParams.delete('preset');
+      window.history.replaceState(null, '', url);
+    }
+  }, []);
+  const [site, setSite] = useState(() => initialProject?.site ?? DEFAULT_SITE);
+  const [volumes, setRawVolumes] = useState(() => initialProject?.volumes ?? (LONG_HOUSE ? layoutSite(startingRow("live-court-sleep", DEFAULT_SITE, nid), DEFAULT_SITE) : [
     // First-time-visit preload — one volume, door off-center, a low
     // window on the opposite wall (across from the door), roof on and
     // sloped, so a new visitor's first view already reads as a real
@@ -1261,8 +1359,13 @@ export default function ShelterVolumeStudy() {
         { id: nid(), wall: "back", type: "window", pos: -4, sill: 1 },
       ],
     },
-  ]);
+  ]));
+  const setVolumes = useCallback((next) => setRawVolumes(previous => {
+    const items = typeof next === 'function' ? next(previous) : next;
+    return LONG_HOUSE ? layoutSite(items, siteRef.current) : items;
+  }), []);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [openingLevel, setOpeningLevel] = useState(0);
   const [planOpen, setPlanOpen] = useState(false);
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
@@ -1272,7 +1375,7 @@ export default function ShelterVolumeStudy() {
   // behavior) but default collapsed/closed on a narrow (phone-width)
   // screen, where either one alone already covers most of the viewport
   // and having both open leaves no room to actually see the model.
-  const [controlsCollapsed, setControlsCollapsed] = useState(() => window.innerWidth < 700);
+  const [controlsCollapsed, setControlsCollapsed] = useState(() => !LONG_HOUSE && window.innerWidth < 700);
   const [takeoffOpen, setTakeoffOpen] = useState(false);
   const [menuMode, setMenuMode] = useState("shape");
   const [cameraPaletteOpen, setCameraPaletteOpen] = useState(false);
@@ -1282,7 +1385,7 @@ export default function ShelterVolumeStudy() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [workspace, setWorkspace] = useState({ centerX: 0, centerZ: 0, halfExtent: SANDBOX });
   // Small non-blocking notice — autosave restore, or a save/load result.
-  const [toast, setToast] = useState(() => (initialProject ? "restored your last session" : ""));
+  const [toast, setToast] = useState(() => (initialProject?.savedAt ? "restored your last session" : ""));
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 4000);
@@ -1299,12 +1402,18 @@ export default function ShelterVolumeStudy() {
   volumesRef.current = volumes;
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
+  const siteRef = useRef(site);
+  siteRef.current = site;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const cameraPaletteOpenRef = useRef(cameraPaletteOpen);
   cameraPaletteOpenRef.current = cameraPaletteOpen;
   const cameraToolRef = useRef(cameraTool);
   cameraToolRef.current = cameraTool;
+
+  const flushAutosave = () => {
+    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serializeProject(volumes, units, showRoofs, site))); } catch { /* Best effort when browser storage is unavailable. */ }
+  };
 
   // Autosave: a safety net, not the primary save path (that's the
   // explicit export below) — debounced so rapid-fire edits (nudging an
@@ -1313,44 +1422,39 @@ export default function ShelterVolumeStudy() {
   // touch `volumes` until release (see the pointer handlers' `up`), so
   // this never fires mid-drag regardless.
   useEffect(() => {
-    const t = setTimeout(() => {
+    const persist = () => {
       try {
-        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serializeProject(volumes, units, showRoofs)));
-      } catch {
-        // Quota exceeded / private browsing — autosave is best-effort,
-        // not critical path, so fail silently rather than interrupt.
-      }
-    }, 700);
-    return () => clearTimeout(t);
-  }, [volumes, units, showRoofs]);
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serializeProject(volumes, units, showRoofs, site)));
+      } catch { /* Browser storage is best effort. */ }
+    };
+    const t = setTimeout(persist, 700);
+    window.addEventListener('pagehide', persist);
+    return () => { clearTimeout(t); window.removeEventListener('pagehide', persist); };
+  }, [volumes, units, showRoofs, site]);
 
   const pushUndo = useCallback(() => {
+    const snapshot = { volumes: volumesRef.current, site: siteRef.current };
     setFuture([]);
-    setHistory((h) => {
-      const next = [...h, volumesRef.current];
-      return next.length > 50 ? next.slice(next.length - 50) : next;
-    });
+    setHistory(h => [...h, snapshot].slice(-50));
   }, []);
 
   const undo = useCallback(() => {
-    setHistory((h) => {
-      if (!h.length) return h;
-      setFuture((f) => [volumesRef.current, ...f].slice(0, 50));
-      setVolumes(h[h.length - 1]);
-      setSelectedIds([]);
-      return h.slice(0, -1);
-    });
-  }, []);
+    const previous = history.at(-1);
+    if (!previous) return;
+    const snapshot = { volumes: volumesRef.current, site: siteRef.current };
+    setFuture(f => [snapshot, ...f].slice(0, 50));
+    siteRef.current = previous.site; setVolumes(previous.volumes); setSite(previous.site); setSelectedIds([]);
+    setHistory(h => h.slice(0, -1));
+  }, [history, setVolumes]);
 
   const redo = useCallback(() => {
-    setFuture((f) => {
-      if (!f.length) return f;
-      setHistory((h) => [...h, volumesRef.current].slice(-50));
-      setVolumes(f[0]);
-      setSelectedIds([]);
-      return f.slice(1);
-    });
-  }, []);
+    const next = future[0];
+    if (!next) return;
+    const snapshot = { volumes: volumesRef.current, site: siteRef.current };
+    setHistory(h => [...h, snapshot].slice(-50));
+    siteRef.current = next.site; setVolumes(next.volumes); setSite(next.site); setSelectedIds([]);
+    setFuture(f => f.slice(1));
+  }, [future, setVolumes]);
 
   /* ---------- scene bootstrap ---------- */
   useEffect(() => {
@@ -1426,6 +1530,17 @@ export default function ShelterVolumeStudy() {
       );
       camera.lookAt(cam.target);
     };
+    const zoomCam = scale => {
+      const maxRadius = Math.max(130, workspaceRef.current.halfExtent * 3);
+      if (LONG_HOUSE) {
+        const next = longHouseZoom(cam.radius, cam.target.z, camera.position.z, scale, siteRef.current.depth, maxRadius);
+        cam.radius = next.radius;
+        cam.target.z = next.targetZ;
+      } else {
+        cam.radius = Math.min(maxRadius, Math.max(18, cam.radius * scale));
+      }
+      applyCam();
+    };
 
     const resize = () => {
       const w = mount.clientWidth, h = mount.clientHeight;
@@ -1480,7 +1595,7 @@ export default function ShelterVolumeStudy() {
       setNDC(e);
       ray.setFromCamera(ndc, camera);
       const hits = ray.intersectObjects(volGroup.children, true);
-      const hit = hits.find((h) => h.object.userData.volumeId);
+      const hit = pickVolumeHit(hits, volumesRef.current);
       if (hit) {
         dragId = hit.object.userData.volumeId;
         if (e.shiftKey) {
@@ -1509,9 +1624,8 @@ export default function ShelterVolumeStudy() {
       if (mode === "pinch" && pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         const nd = Math.hypot(a.x - b.x, a.y - b.y);
-        cam.radius = Math.min(Math.max(130, workspaceRef.current.halfExtent * 3), Math.max(18, cam.radius * (pinchDist / Math.max(nd, 1))));
+        zoomCam(pinchDist / Math.max(nd, 1));
         pinchDist = nd;
-        applyCam();
       } else if (mode === "drag" && dragId != null) {
         const gp = groundHit(e);
         const rawX = Math.round(gp.x - dragOffset.x);
@@ -1520,7 +1634,7 @@ export default function ShelterVolumeStudy() {
         const activeIds = dragStarts.map((item) => item.id);
         const snap = dragged ? computeSnap(dragged, volumesRef.current.filter((v) => !activeIds.includes(v.id)), rawX, rawZ) : { x: rawX, z: rawZ, guide: null };
         const anchorStart = dragStarts.find((item) => item.id === dragId);
-        let dx = snap.x - anchorStart.x, dz = snap.z - anchorStart.z;
+        let dx = LONG_HOUSE ? 0 : snap.x - anchorStart.x, dz = LONG_HOUSE ? rawZ - anchorStart.z : snap.z - anchorStart.z;
         const selectedVolumes = volumesRef.current.filter((v) => activeIds.includes(v.id));
         const b = projectPlanBounds(selectedVolumes);
         const ws = workspaceRef.current;
@@ -1592,7 +1706,7 @@ export default function ShelterVolumeStudy() {
         if (pending?.length) {
           pushUndo();
           const byId = new Map(pending.map((p) => [p.id, p]));
-          setVolumes((vs) => vs.map((v) => byId.has(v.id) ? { ...v, x: byId.get(v.id).x, z: byId.get(v.id).z } : v));
+          setVolumes((vs) => { const next = vs.map((v) => byId.has(v.id) ? { ...v, x: byId.get(v.id).x, z: byId.get(v.id).z } : v); return LONG_HOUSE ? next.sort((a, b) => a.z - b.z) : next; });
         }
         threeRef.current.pendingPositions = null;
         if (threeRef.current.guideLine) threeRef.current.guideLine.visible = false;
@@ -1605,8 +1719,7 @@ export default function ShelterVolumeStudy() {
 
     const wheel = (e) => {
       e.preventDefault();
-      cam.radius = Math.min(Math.max(130, workspaceRef.current.halfExtent * 3), Math.max(18, cam.radius * (1 + e.deltaY * 0.001)));
-      applyCam();
+      zoomCam(Math.exp(e.deltaY * 0.001));
     };
 
     const el = renderer.domElement;
@@ -1630,7 +1743,7 @@ export default function ShelterVolumeStudy() {
       renderer.dispose();
       mount.removeChild(el);
     };
-  }, [pushUndo]);
+  }, [pushUndo, setVolumes]);
 
   useEffect(() => {
     const { ground, grid, boundary, scene, sun, camera } = threeRef.current;
@@ -1692,7 +1805,16 @@ export default function ShelterVolumeStudy() {
       });
       volGroup.remove(c);
     }
-    for (const v of volumes) volGroup.add(buildVolumeGroup(v, baseTex));
+    for (const v of [...volumes, ...(LONG_HOUSE ? [...sideCourtSections(volumes, site), ...siteWallVolumes(volumes, site)] : [])]) volGroup.add(buildVolumeGroup(v, baseTex, LONG_HOUSE ? site : null));
+    if (LONG_HOUSE) {
+      const points = [[-site.width/2,-site.depth/2],[site.width/2,-site.depth/2],[site.width/2,site.depth/2],[-site.width/2,site.depth/2]].map(([x,z]) => new THREE.Vector3(x, .12, z));
+      volGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: OXIDE })));
+      for (let row = 0; row < siteRowCount(site); row++) {
+      const x = rowCenter(site, row);
+      const axis = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x,.15,-site.depth/2-5),new THREE.Vector3(x,.15,site.depth/2+5)]),new THREE.LineDashedMaterial({ color: OXIDE, dashSize: 1, gapSize: 1 }));
+      axis.computeLineDistances(); volGroup.add(axis);
+      }
+    }
     for (const selectedId of selectedIds) {
       const g = volGroup.children.find((c) => c.userData.volumeId === selectedId);
       if (g) {
@@ -1702,11 +1824,11 @@ export default function ShelterVolumeStudy() {
       }
     }
     volGroup.traverse((o) => { if (o.userData.isRoof) o.visible = showRoofs; });
-  }, [volumes, selectedIds, showRoofs, earthTexReady, lavaTexReady]);
+  }, [volumes, selectedIds, showRoofs, earthTexReady, lavaTexReady, site]);
 
   /* ---------- actions ---------- */
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
-  const sel = volumes.find((v) => v.id === selectedId) || null;
+  const sel = volumes.find((v) => v.id === selectedId && !isCourt(v)) || null;
 
   const update = (patch) => {
     pushUndo();
@@ -1749,9 +1871,14 @@ export default function ShelterVolumeStudy() {
     pushUndo();
     setVolumes((vs) => vs.filter((v) => !ids.includes(v.id)));
     setSelectedIds([]);
-  }, [pushUndo]);
+  }, [pushUndo, setVolumes]);
 
+  const addRowItem = (kind = 'room') => {
+    const item = { ...makeRowItem(kind, rowWidth(site), nid), row: sel?.row ?? 0 };
+    pushUndo(); setVolumes(vs => [...vs, item]); setSelectedIds([item.id]);
+  };
   const addVolume = () => {
+    if (LONG_HOUSE) { addRowItem(); return; }
     pushUndo();
     const n = volumes.length;
     const nv = {
@@ -1764,6 +1891,7 @@ export default function ShelterVolumeStudy() {
   };
 
   const addCylinder = () => {
+    if (LONG_HOUSE) { addRowItem('court'); return; }
     pushUndo();
     const n = volumes.length;
     const nv = {
@@ -1776,6 +1904,7 @@ export default function ShelterVolumeStudy() {
   };
 
   const addWall = () => {
+    if (LONG_HOUSE) { setToast('Choose Shared wall between adjacent rooms in the row.'); return; }
     pushUndo();
     const n = volumes.length;
     const nv = {
@@ -1795,7 +1924,7 @@ export default function ShelterVolumeStudy() {
   };
 
   const saveProject = () => {
-    const payload = serializeProject(volumes, units, showRoofs);
+    const payload = serializeProject(volumes, units, showRoofs, site);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1825,13 +1954,20 @@ export default function ShelterVolumeStudy() {
       setToast(`couldn't load — ${err}`);
       return;
     }
+    if ((obj.pattern === 'long-house') !== LONG_HOUSE) {
+      setToast(`Open ${obj.pattern === 'long-house' ? 'Long House' : 'Four Walls'} mode before loading this project.`); return;
+    }
     if (volumes.length > 0 && !window.confirm("Loading this file will replace your current scene. Continue?")) {
       return;
     }
 
+    obj.volumes = normalizeProjectIds(obj.volumes);
     bumpIdCounter(obj.volumes);
+    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(obj)); } catch { /* Best effort. */ }
     pushUndo();
+    if (obj.site) siteRef.current = obj.site;
     setVolumes(obj.volumes);
+    if (obj.site) setSite(obj.site);
     setUnits(obj.units === "metric" ? "metric" : "imperial");
     setShowRoofs(obj.showRoofs !== false);
     setSelectedIds([]);
@@ -1856,11 +1992,12 @@ export default function ShelterVolumeStudy() {
       return;
     }
     const pos = clampPos(sel, wall, 0);
-    const taken = sel.openings.filter((o) => o.wall === wall).map((o) => o.pos);
+    const level = LONG_HOUSE && sel.stories === 2 ? openingLevel : 0;
+    const taken = sel.openings.filter((o) => o.wall === wall && (o.level || 0) === level).map((o) => o.pos);
     let p = pos, tries = 0;
     while (taken.some((tp) => Math.abs(tp - p) < OPEN_W) && tries < 12) { p = clampPos(sel, wall, p + OPEN_W); tries++; }
-    if (sel.shape === "wall" && taken.some((tp) => Math.abs(tp - p) < OPEN_W)) { setToast("no room for another opening"); return; }
-    const opening = { id: nid(), wall, type, pos: p };
+    if ((sel.shape === "wall" || LONG_HOUSE) && taken.some((tp) => Math.abs(tp - p) < OPEN_W)) { setToast("no room for another opening"); return; }
+    const opening = { id: nid(), wall, type, pos: p, ...(LONG_HOUSE ? { level } : {}) };
     if (type === "window") opening.sill = SILL;
     update({ openings: [...sel.openings, opening] });
   };
@@ -1944,9 +2081,18 @@ export default function ShelterVolumeStudy() {
     const b = projectPlanBounds(items);
     cam.target.set((b.minX + b.maxX) / 2, 4, (b.minZ + b.maxZ) / 2);
     const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 24);
-    cam.radius = Math.min(ws.halfExtent * 3, Math.max(35, span * 1.35));
+    cam.radius = Math.min(ws.halfExtent * 3, Math.max(LONG_HOUSE ? 75 : 35, span * (LONG_HOUSE ? 1.9 : 1.35)));
     applyCam();
   }, []);
+
+  useEffect(() => {
+    if (!LONG_HOUSE) return;
+    const ws = workspaceForLoadedVolumes([...volumes, { shape: 'cubiform', x: 0, z: 0, rot: 0, w: site.width, d: site.depth }]);
+    setWorkspace(ws);
+  }, [volumes, site]);
+  useEffect(() => {
+    if (LONG_HOUSE) frameAllVolumes(volumesRef.current, workspaceForLoadedVolumes(volumesRef.current));
+  }, [frameAllVolumes]);
 
   // Small continuous nudges from wherever the camera currently is —
   // distinct from `preset` above, which jumps to a fixed named angle.
@@ -1966,7 +2112,7 @@ export default function ShelterVolumeStudy() {
   };
 
   const downloadPlan = () => {
-    const { markup } = planSVG(volumes, units);
+    const { markup } = planSVG(volumes, units, site);
     const blob = new Blob([markup], { type: "image/svg+xml" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1976,7 +2122,7 @@ export default function ShelterVolumeStudy() {
   };
 
   /* ---------- UI ---------- */
-  const wallNames = { front: "S", back: "N", right: "E", left: "W" };
+  const wallNames = LONG_HOUSE ? { front: "FRONT", back: "BACK", right: "RIGHT", left: "LEFT" } : { front: "S", back: "N", right: "E", left: "W" };
   // ---- aesthetic tokens: glass panels, text-only monochrome controls ----
   // Panel "material" — a dark, blurred glass so the earth-tone lighting of
   // the 3D scene reads through, rather than an opaque card. The tint is
@@ -2033,8 +2179,21 @@ export default function ShelterVolumeStudy() {
     </div>
   );
 
-  const plan = planOpen ? planSVG(volumes, units) : null;
-  const takeoff = projectTakeoff(volumes, TAKEOFF_DEFAULTS);
+  const plan = planOpen ? planSVG(volumes, units, site) : null;
+  const countableRooms = volumes.filter(v => !isCourt(v)).flatMap(v => {
+    if (!LONG_HOUSE) return [v];
+    return roomLevels(v, site).map((level, index) => ({ ...level,
+      id: v.stories === 2 ? `room-${v.id}-${index}` : v.id,
+      levelName: v.stories === 2 ? `${v.label} · ${index === 0 ? 'GROUND' : 'UPPER'}` : v.label,
+      omitWallKeys: [
+        ...(level.siteLeft ? ['left'] : []), ...(level.siteRight ? ['right'] : []),
+        ...(level.siteBack ? ['back'] : []), ...(level.siteFront ? ['front'] : []),
+      ],
+    }));
+  });
+  const takeoffItems = [...countableRooms, ...(LONG_HOUSE ? siteWallVolumes(volumes,site) : [])];
+  const takeoff = projectTakeoff(takeoffItems, TAKEOFF_DEFAULTS);
+  const openCourts = LONG_HOUSE ? courtNetworks(volumes, site) : [];
   const fmt = (n, dp = 0) => n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
   const downloadTakeoff = () => {
@@ -2043,7 +2202,7 @@ export default function ShelterVolumeStudy() {
     const totalArea = grand.extNetArea + grand.intNetArea;
     const lines = [
       "SHELTER ON THE LAND · MATERIALS TAKEOFF",
-      `${volumes.length} volume${volumes.length === 1 ? "" : "s"}`,
+      LONG_HOUSE ? `${volumes.filter(v=>!isCourt(v)).length} rooms · continuous compound wall assembly` : `${volumes.length} volume${volumes.length === 1 ? "" : "s"}`,
       "",
       "PROJECT TOTAL",
       `net wall volume: ${fmt(grand.netVolCuft)} cuft (${fmt(grand.netVolCuyd, 1)} cuyd)`,
@@ -2056,12 +2215,12 @@ export default function ShelterVolumeStudy() {
       `wall area total: ${formatArea(totalArea, units)}`,
       `floor area: ${formatArea(grand.floorArea, units)}`,
       "",
-      "PER VOLUME",
-      ...volumes.flatMap((v, i) => {
+      LONG_HOUSE ? "ROOMS + COMPOUND BOUNDARY" : "PER VOLUME",
+      ...takeoffItems.flatMap((v, i) => {
         const r = rows[i];
         const rTotalArea = r.extNetArea + r.intNetArea;
         return [
-          `${i + 1}. ${volumeDesc(v, units)}`,
+          `${i + 1}. ${LONG_HOUSE && String(v.id).startsWith("site-") ? "COMPOUND BOUNDARY WALL · continuous run" : `${v.levelName ? `${v.levelName} · ` : ''}${volumeDesc(v, units)}`}`,
           `   vol ${fmt(r.netVolCuft)} cuft (${fmt(r.netVolCuyd, 1)} cuyd) · wt ${fmt(r.weightTons, 1)} t · cement ${Math.ceil(r.cementBags)} bags`,
           `   ${r.aggLabel} ${fmt(r.aggCuyd, 1)} cuyd · area ext ${formatArea(r.extNetArea, units)} · int ${formatArea(r.intNetArea, units)} · total ${formatArea(rTotalArea, units)}`,
           `   floor area ${formatArea(r.floorArea, units)}`,
@@ -2079,6 +2238,7 @@ export default function ShelterVolumeStudy() {
   };
 
   const nudgeSelected = useCallback((dx, dz) => {
+    if (LONG_HOUSE) return;
     const ids = selectedIdsRef.current;
     if (!ids.length) return;
     const selected = volumesRef.current.filter((v) => ids.includes(v.id));
@@ -2088,14 +2248,15 @@ export default function ShelterVolumeStudy() {
     if (!safeDx && !safeDz) return;
     pushUndo();
     setVolumes((vs) => vs.map((v) => ids.includes(v.id) ? { ...v, x: v.x + safeDx, z: v.z + safeDz } : v));
-  }, [pushUndo]);
+  }, [pushUndo, setVolumes]);
 
   const rotateSelected = useCallback(() => {
+    if (LONG_HOUSE) return;
     const ids = selectedIdsRef.current;
     if (!ids.length) return;
     pushUndo();
     setVolumes((vs) => vs.map((v) => ids.includes(v.id) ? { ...v, rot: (v.rot + 45) % 360 } : v));
-  }, [pushUndo]);
+  }, [pushUndo, setVolumes]);
 
   const keyboardActionsRef = useRef({});
   keyboardActionsRef.current = { addVolume, addCylinder, addWall, frameAllVolumes, nudgeSelected, preset, redo, removeSelected, rotateSelected, saveProject, triggerLoad, undo };
@@ -2143,11 +2304,13 @@ export default function ShelterVolumeStudy() {
           <span>shape it&nbsp;&nbsp; on the &nbsp;&nbsp;land</span>
         </button>
         <div className="project-switcher">
-          <button onClick={() => { setProjectMenuOpen((v) => !v); setMoreMenuOpen(false); }}>PROJECT 01 <span>⌄</span></button>
+          <button onClick={() => { setProjectMenuOpen((v) => !v); setMoreMenuOpen(false); }}>{LONG_HOUSE ? "LONG HOUSE" : "FOUR WALLS"} <span>⌄</span></button>
           {projectMenuOpen && <div className="app-popover project-popover">
             <button onClick={() => { saveProject(); setProjectMenuOpen(false); }}>SAVE PROJECT</button>
             <button onClick={() => { triggerLoad(); setProjectMenuOpen(false); }}>OPEN PROJECT</button>
-            <button disabled>RENAME <span>SOON</span></button>
+            <div className="popover-label">PATTERN · SEPARATE WORKSPACES</div>
+            <a className="pattern-link" onClick={flushAutosave} href="?mode=four-walls">FOUR WALLS ↗</a>
+            <a className="pattern-link" onClick={flushAutosave} href="?mode=long-house">LONG HOUSE ↗</a>
           </div>}
           <input ref={loadInputRef} type="file" accept=".json,application/json" hidden onChange={handleLoadFile} />
         </div>
@@ -2180,7 +2343,8 @@ export default function ShelterVolumeStudy() {
         </div>
         <button className="menu-collapse" aria-label="Collapse menu" onClick={() => setControlsCollapsed(true)}>−</button>
         <div className="builder-scroll">
-          {menuMode === "shape" && <>
+          {menuMode === "shape" && LONG_HOUSE && <LongHousePanel items={volumes} selectedId={selectedId} select={id => setSelectedIds(id == null ? [] : [id])} change={(next, frame) => { pushUndo(); setVolumes(next); if (frame) requestAnimationFrame(() => frameAllVolumes(layoutSite(next, site), workspaceForLoadedVolumes(next))); }} site={site} setSite={next => { pushUndo(); const items = resizeSite(volumes, site, next, nid); siteRef.current = next; setSite(next); setVolumes(items); setSelectedIds([]); requestAnimationFrame(() => frameAllVolumes([...items, ...siteWallVolumes(items, next)], workspaceForLoadedVolumes(items))); }} nid={nid} openOpenings={() => setMenuMode('open')} placesInitially={!initialProject && !launch.has('preset')}/>}
+          {menuMode === "shape" && !LONG_HOUSE && <>
             <section className="builder-section">
               <div className="section-number">01</div><h2>VOLUMES</h2>
               <p>Add and configure building volumes.</p>
@@ -2226,12 +2390,13 @@ export default function ShelterVolumeStudy() {
             <button className="add-volume-footer" onClick={sel?.shape === 'cylinder' ? addCylinder : sel?.shape === 'wall' ? addWall : addVolume}>＋ ADD {sel?.shape === "wall" ? "WALL" : "VOLUME"}</button>
           </>}
 
-          {menuMode === "open" && <>{!sel && <div className="empty-state"><span>SELECT A VOLUME</span><h2>OPENINGS BEGIN<br/>WITH A WALL.</h2><p>Choose a volume in the model to add doors and windows.</p></div>}{sel && <>
-            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">01</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:sel.shape==='wall'?'THROUGH WALL':`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button title="Move left" onClick={() => nudgeOpening(o.id,-1)}>←</button><button title="Move right" onClick={() => nudgeOpening(o.id,1)}>→</button>{o.type === 'window' && <><button title="Raise sill" onClick={() => nudgeSill(o.id,1)}>↑</button><button title="Lower sill" onClick={() => nudgeSill(o.id,-1)}>↓</button></>}<button title="Narrower" onClick={() => nudgeWidth(o.id,-1)}>w−</button><button title="Wider" onClick={() => nudgeWidth(o.id,1)}>w+</button><button title="Shorter" onClick={() => nudgeHeight(o.id,-1)}>h−</button><button title="Taller" onClick={() => nudgeHeight(o.id,1)}>h+</button><button title="Remove" onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
+          {menuMode === "open" && <>{LONG_HOUSE && sel && <section className="builder-section"><h2>{sel.label}</h2><p>Front faces later in the row; back faces the street end.</p>{sel.openings.map(o => <p key={o.id}>{o.type} · {openingRelationship(volumes, sel.id, o.wall, site, o.level)}</p>)}{sel.stories === 2 && <label className="lh-field">New opening level<select aria-label="New opening level" value={openingLevel} onChange={e => setOpeningLevel(Number(e.target.value))}><option value="0">Ground room</option><option value="1">Upper room</option></select></label>}</section>}{!sel && <div className="empty-state"><span>SELECT A VOLUME</span><h2>OPENINGS BEGIN<br/>WITH A WALL.</h2><p>Choose a volume in the model to add doors and windows.</p></div>}{sel && <>
+            {sel.openings.length > 0 && <section className="builder-section"><div className="section-number">01</div><h2>PLACED</h2><p>Adjust openings on the selected volume.</p>{sel.openings.map(o => <div className="opening-row" key={o.id}><div><strong>{o.type.toUpperCase()}{LONG_HOUSE ? o.level === 1 ? " · UPPER" : " · GROUND" : ""}</strong><span>{sel.shape==='cylinder'?`${Math.round(o.angle*180/Math.PI)}°`:sel.shape==='wall'?'THROUGH WALL':`${wallNames[o.wall]} WALL`} · {openingWidth(o)}′ × {openingHeight(o)}′</span></div><div className="opening-actions"><button title="Move left" onClick={() => nudgeOpening(o.id,-1)}>←</button><button title="Move right" onClick={() => nudgeOpening(o.id,1)}>→</button>{o.type === 'window' && <><button title="Raise sill" onClick={() => nudgeSill(o.id,1)}>↑</button><button title="Lower sill" onClick={() => nudgeSill(o.id,-1)}>↓</button></>}<button title="Narrower" onClick={() => nudgeWidth(o.id,-1)}>w−</button><button title="Wider" onClick={() => nudgeWidth(o.id,1)}>w+</button><button title="Shorter" onClick={() => nudgeHeight(o.id,-1)}>h−</button><button title="Taller" onClick={() => nudgeHeight(o.id,1)}>h+</button><button title="Remove" onClick={() => update({openings:sel.openings.filter(x=>x.id!==o.id)})}>×</button></div></div>)}</section>}
             {[[sel.openings.length ? '02' : '01','DOORS','door'],[sel.openings.length ? '03' : '02','WINDOWS','window']].map(([num,title,type]) => <section className="builder-section" key={type}><div className="section-number">{num}</div><h2>{title}</h2><p>Add a {type} to a wall.</p>{sel.shape === 'cylinder' ? <button className="primary full" onClick={() => addOpening(null,type)}>＋ ADD {type.toUpperCase()}</button> : sel.shape === 'wall' ? <button className="primary full" onClick={() => addOpening('front',type)}>＋ ADD THROUGH {type.toUpperCase()}</button> : <><div className="field-label">SELECT WALL</div><div className="wall-grid">{Object.entries(wallNames).map(([wall,name]) => <button key={wall} onClick={() => addOpening(wall,type)}>{name}<small>＋ {type.toUpperCase()}</small></button>)}</div></>}</section>)}
           </>}</>}
 
-          {menuMode === "count" && <div className="count-mode"><div className="count-kicker">COUNT</div><h2>YOUR BUILD</h2><div className="big-stat"><strong>{String(volumes.length).padStart(2,'0')}</strong><span>VOLUMES</span></div><div className="big-stat"><strong>{fmt(takeoff.grand.extNetArea + takeoff.grand.intNetArea)}</strong><span>FT² FORMED</span></div><section className="count-ledger"><h3>MATERIAL TAKEOFF</h3><DataRow k="WALL VOLUME" v={`${fmt(takeoff.grand.netVolCuyd,1)} YD³`}/><DataRow k="CEMENT" v={`${Math.ceil(takeoff.grand.cementBags)} BAGS`}/>{takeoff.soilCuyd>0&&<DataRow k="EARTH" v={`${fmt(takeoff.soilCuyd,1)} YD³`}/>} {takeoff.lavaSandCuyd>0&&<DataRow k="LAVASAND" v={`${fmt(takeoff.lavaSandCuyd,1)} YD³`}/>}<DataRow k="WALL WEIGHT" v={`${fmt(takeoff.grand.weightTons,1)} TONS`}/><DataRow k="FLOOR AREA" v={formatArea(takeoff.grand.floorArea,units)}/></section><button className="export-action" onClick={downloadTakeoff}>↓ EXPORT MATERIAL TAKEOFF</button></div>}
+          {menuMode === "count" && LONG_HOUSE && <section className="builder-section"><h2>THE COMPOUND</h2><p>{volumes.filter(v => !isCourt(v)).length} rooms · {openCourts.length} connected open-air court{openCourts.length === 1 ? '' : 's'}</p><p>{formatArea(openCourts.reduce((sum, court) => sum + court.area, 0), units)} open court area, including the strips beside narrow rooms.</p><p>{formatArea(takeoff.grand.floorArea, units)} enclosed floor area across both levels.</p></section>}
+          {menuMode === "count" && !LONG_HOUSE && <div className="count-mode"><div className="count-kicker">COUNT</div><h2>YOUR BUILD</h2><div className="big-stat"><strong>{String(volumes.length).padStart(2,'0')}</strong><span>VOLUMES</span></div><div className="big-stat"><strong>{fmt(takeoff.grand.extNetArea + takeoff.grand.intNetArea)}</strong><span>FT² FORMED</span></div><section className="count-ledger"><h3>MATERIAL TAKEOFF</h3><DataRow k="WALL VOLUME" v={`${fmt(takeoff.grand.netVolCuyd,1)} YD³`}/><DataRow k="CEMENT" v={`${Math.ceil(takeoff.grand.cementBags)} BAGS`}/>{takeoff.soilCuyd>0&&<DataRow k="EARTH" v={`${fmt(takeoff.soilCuyd,1)} YD³`}/>} {takeoff.lavaSandCuyd>0&&<DataRow k="LAVASAND" v={`${fmt(takeoff.lavaSandCuyd,1)} YD³`}/>}<DataRow k="WALL WEIGHT" v={`${fmt(takeoff.grand.weightTons,1)} TONS`}/><DataRow k="FLOOR AREA" v={formatArea(takeoff.grand.floorArea,units)}/></section><button className="export-action" onClick={downloadTakeoff}>↓ EXPORT MATERIAL TAKEOFF</button></div>}
 
           {menuMode === "capture" && <><section className="builder-section"><div className="section-number">01</div><h2>VIEW</h2><p>Set the view for model inspection and output.</p><div className="field-label">CAMERA</div><div className="preset-grid">{[["aerial-sw","SW 3D"],["aerial-ne","NE 3D"],["eye-s","SOUTH"],["eye-w","WEST"],["top","PLAN"]].map(([k,n])=><button key={k} onClick={()=>preset(k)}>{n}</button>)}</div><div className="field-label">ROOF VISIBILITY</div><div className="segmented"><button className={showRoofs?'active':''} onClick={()=>setShowRoofs(true)}>ROOFS ON</button><button className={!showRoofs?'active':''} onClick={()=>setShowRoofs(false)}>ROOFS OFF</button></div></section><section className="builder-section"><div className="section-number">02</div><h2>FRAME</h2><p>Prepare a clean architectural output.</p><button className="outline-action" onClick={()=>setPlanOpen(true)}>OPEN DRAWING PLAN ↗</button></section><section className="builder-section"><div className="section-number">03</div><h2>CAPTURE</h2><p>Save the current model view as an image.</p><button className="capture-action" onClick={snapshot}>TAKE SCREENSHOT</button></section></>}
         </div>
@@ -2539,7 +2704,7 @@ export default function ShelterVolumeStudy() {
       {/* plan modal — an opaque printed-drawing card (not glass): it's meant
           to read as an actual technical output, not a floating UI panel. */}
       {planOpen && plan && (
-        <div style={{ position: "absolute", inset: 0, background: "rgba(38,33,25,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        <div style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(38,33,25,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setPlanOpen(false)}>
           <div style={{ background: PAPER, border: `1px solid ${INK}`, borderRadius: GLASS_RADIUS, maxWidth: "97%", maxHeight: "93%", overflow: "auto", padding: 10 }}
             onClick={(e) => e.stopPropagation()}>
@@ -2572,7 +2737,7 @@ export default function ShelterVolumeStudy() {
             <button style={btn} onClick={() => setTakeoffOpen(false)}>close</button>
           </div>
 
-          <div style={label}>Project Total &#183; {volumes.length} volume{volumes.length === 1 ? "" : "s"}</div>
+          <div style={label}>Project Total &#183; {LONG_HOUSE ? `${volumes.filter(v=>!isCourt(v)).length} rooms + compound boundary` : `${volumes.length} volume${volumes.length === 1 ? "" : "s"}`}</div>{LONG_HOUSE && <p style={{ color: WHITE_DIM, fontSize: 10 }}>The full compound wall is counted once as a continuous run. Room takeoffs exclude sections provided by the compound wall or already shared between rooms.</p>}
           <div>
             <DataRow k="net wall vol" v={`${fmt(takeoff.grand.netVolCuft)} cuft · ${fmt(takeoff.grand.netVolCuyd, 1)} cuyd`} />
             <DataRow k="wall weight" v={`${fmt(takeoff.grand.weightTons, 1)} tons`} />
@@ -2585,7 +2750,7 @@ export default function ShelterVolumeStudy() {
             <DataRow k="floor area" v={formatArea(takeoff.grand.floorArea, units)} />
           </div>
 
-          <div style={{ ...label, marginTop: 10 }}>Per Volume</div>
+          <div style={{ ...label, marginTop: 10 }}>{LONG_HOUSE ? "Rooms + continuous compound boundary" : "Per Volume"}</div>
           {takeoff.rows.map((r, i) => (
             <div key={r.id} style={{ marginBottom: 10 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 2 }}>
@@ -2594,7 +2759,7 @@ export default function ShelterVolumeStudy() {
                   borderRadius: "50%", background: "rgba(255,255,255,0.85)", color: "#141210", fontSize: 9,
                   fontFamily: "ui-monospace,monospace", flexShrink: 0,
                 }}>{i + 1}</span>
-                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, color: WHITE }}>{volumeDesc(volumes[i], units)}</span>
+                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, color: WHITE }}>{LONG_HOUSE && String(r.id).startsWith("site-") ? "COMPOUND BOUNDARY · continuous run" : `${takeoffItems[i].levelName ? `${takeoffItems[i].levelName} · ` : ''}${volumeDesc(takeoffItems[i], units)}`}</span>
               </div>
               <DataRow k="vol" v={`${fmt(r.netVolCuft)} cuft · ${fmt(r.netVolCuyd, 1)} cuyd`} dim />
               <DataRow k="weight · cement" v={`${fmt(r.weightTons, 1)} t · ${Math.ceil(r.cementBags)} bags`} dim />
