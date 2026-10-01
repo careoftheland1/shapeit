@@ -8,6 +8,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'index.html',
+        longHouse: 'long-house.html',
         guide: 'guide.html',
         seeIt: 'see-it.html',
       },
